@@ -1,0 +1,83 @@
+name: Publish
+
+# Triggered by the spec repo's promote.yml via repository_dispatch.
+# Builds and publishes the package to NuGet using the version supplied
+# in the dispatch payload.
+
+on:
+  repository_dispatch:
+    types: [publish]
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (must match Directory.Build.props ConcordexSpecVersion)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: nuget-publish
+    steps:
+      - name: Resolve version from payload or input
+        id: v
+        env:
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          INPUT_VERSION:    ${{ inputs.version }}
+        run: |
+          VERSION="${DISPATCH_VERSION:-$INPUT_VERSION}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::no version supplied"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check out at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: release/v${{ steps.v.outputs.version }}
+
+      - name: Verify version matches Directory.Build.props
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          PINNED=$(grep -oP '<ConcordexSpecVersion>\K[^<]+' Directory.Build.props)
+          if [ "$PINNED" != "$VERSION" ]; then
+            echo "::error::dispatch version $VERSION != Directory.Build.props $PINNED"
+            exit 1
+          fi
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build + pack
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          dotnet build --configuration Release -p:Version="$VERSION"
+          dotnet pack src/Concordex.Sdk --configuration Release -p:Version="$VERSION" --output ./artifacts
+
+      - name: Push to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "./artifacts/Concordex.Sdk.${{ steps.v.outputs.version }}.nupkg" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Push symbols
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "./artifacts/Concordex.Sdk.${{ steps.v.outputs.version }}.snupkg" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate || true

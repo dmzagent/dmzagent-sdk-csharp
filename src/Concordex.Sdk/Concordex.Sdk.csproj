@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Concordex.Sdk</RootNamespace>
+    <AssemblyName>Concordex.Sdk</AssemblyName>
+
+    <!-- NuGet package metadata -->
+    <PackageId>Concordex.Sdk</PackageId>
+    <Authors>Concordex</Authors>
+    <Company>Eastern Shore Solutions</Company>
+    <Product>Concordex SDK for .NET</Product>
+    <Description>
+      Official .NET client for the Concordex agent-stream and circuit-breaker
+      APIs. Implements spec version $(ConcordexSpecVersion); use the exception
+      hierarchy and event helpers documented at https://spec.concordex.dev.
+    </Description>
+    <PackageTags>concordex;agents;observability;circuit-breaker;sdk</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/praeceptor-thesis/concordex-sdk-csharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://spec.concordex.dev</PackageProjectUrl>
+
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IncludeBuildOutput>true</IncludeBuildOutput>
+
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\LICENSE"   Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>

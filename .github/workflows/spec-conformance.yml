@@ -1,0 +1,101 @@
+name: Spec Conformance
+
+# Runs the contract test corpus from concordex-sdk-spec against this SDK
+# build, then reports the status check that promote.yml in the spec repo
+# verifies before dispatching publish.yml here.
+
+on:
+  push:
+    branches: [main, 'release/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  statuses: write
+
+concurrency:
+  group: spec-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out SDK
+        uses: actions/checkout@v4
+
+      - name: Resolve pinned spec version
+        id: spec
+        run: |
+          VERSION=$(grep -oP '<ConcordexSpecVersion>\K[^<]+' Directory.Build.props)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve spec checkout ref
+        id: spec_ref
+        env:
+          VERSION: ${{ steps.spec.outputs.version }}
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/release/*|refs/tags/v*)
+              echo "ref=v${VERSION}" >> "$GITHUB_OUTPUT"
+              echo "mode=release"  >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "ref=main"      >> "$GITHUB_OUTPUT"
+              echo "mode=dev"      >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Check out concordex-sdk-spec
+        uses: actions/checkout@v4
+        with:
+          repository: praeceptor-thesis/concordex-sdk-spec
+          ref: ${{ steps.spec_ref.outputs.ref }}
+          path: spec
+
+      - name: Verify spec VERSION matches pin (release mode only)
+        if: steps.spec_ref.outputs.mode == 'release'
+        env:
+          VERSION: ${{ steps.spec.outputs.version }}
+        run: |
+          FILE_VERSION=$(cat spec/VERSION | tr -d '[:space:]')
+          if [ "$FILE_VERSION" != "$VERSION" ]; then
+            echo "::error::spec VERSION '$FILE_VERSION' does not match pin '$VERSION'"
+            exit 1
+          fi
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore + build
+        run: dotnet build --configuration Release
+
+      - name: Run contract tests
+        env:
+          CONCORDEX_SPEC_PATH: ${{ github.workspace }}/spec
+        run: dotnet test tests/Concordex.Sdk.Tests --configuration Release --logger "trx" --results-directory TestResults
+
+      - name: Report status check
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          CONCLUSION: ${{ job.status == 'success' && 'success' || 'failure' }}
+          SPEC_VERSION: ${{ steps.spec.outputs.version }}
+        with:
+          script: |
+            const { CONCLUSION, SPEC_VERSION } = process.env;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              sha:   context.sha,
+              state: CONCLUSION,
+              context: `spec-conformance/${SPEC_VERSION}`,
+              description: CONCLUSION === 'success'
+                ? `Contract corpus passed against spec v${SPEC_VERSION}`
+                : `Contract corpus failed against spec v${SPEC_VERSION}`,
+            });

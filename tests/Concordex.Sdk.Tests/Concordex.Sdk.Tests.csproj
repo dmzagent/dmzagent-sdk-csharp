@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!--
+      The spec repo is expected to live next to this one on disk during
+      local dev, and CI lays it out the same way (see
+      .github/workflows/spec-conformance.yml). The contract corpus path
+      can also be overridden via the CONCORDEX_SPEC_PATH env var.
+    -->
+    <ConcordexSpecPath Condition="'$(ConcordexSpecPath)' == ''">$(MSBuildThisFileDirectory)..\..\..\concordex-sdk-spec</ConcordexSpecPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk"   Version="17.10.0" />
+    <PackageReference Include="xunit"                    Version="2.9.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions"          Version="6.12.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Concordex.Sdk\Concordex.Sdk.csproj" />
+  </ItemGroup>
+
+</Project>
