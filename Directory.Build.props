@@ -7,8 +7,16 @@
   -->
   <PropertyGroup>
     <ConcordexSpecVersion>0.5.0</ConcordexSpecVersion>
-    <Version>$(ConcordexSpecVersion)</Version>
-    <PackageVersion>$(ConcordexSpecVersion)</PackageVersion>
+    <!--
+      The SDK package version. Decoupled from ConcordexSpecVersion as of
+      v0.6.0 — additive Concordia MCP client surface (#221 / MCP-1.5b)
+      ships in the same package alongside the agent-stream surface that
+      still targets spec 0.5.0. publish.yml must compare the release tag
+      against SdkVersion (not ConcordexSpecVersion).
+    -->
+    <SdkVersion>0.6.0</SdkVersion>
+    <Version>$(SdkVersion)</Version>
+    <PackageVersion>$(SdkVersion)</PackageVersion>
 
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
