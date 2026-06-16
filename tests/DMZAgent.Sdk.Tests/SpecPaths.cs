@@ -1,12 +1,12 @@
 using System;
 using System.IO;
 
-namespace Concordex.Sdk.Tests;
+namespace DMZAgent.Sdk.Tests;
 
 /// <summary>
 /// Resolves the contract-test corpus on disk. Per the runner spec the
 /// SDK repo and the spec repo sit side-by-side; CI checks the spec out
-/// at the pinned tag and exports <c>CONCORDEX_SPEC_PATH</c>.
+/// at the pinned tag and exports <c>DMZAGENT_SPEC_PATH</c>.
 /// </summary>
 internal static class SpecPaths
 {
@@ -20,20 +20,20 @@ internal static class SpecPaths
 
     private static string ResolveSpecRoot()
     {
-        var fromEnv = Environment.GetEnvironmentVariable("CONCORDEX_SPEC_PATH");
+        var fromEnv = Environment.GetEnvironmentVariable("DMZAGENT_SPEC_PATH");
         if (!string.IsNullOrWhiteSpace(fromEnv) && Directory.Exists(fromEnv)) return fromEnv;
 
         // Walk up from the test-runner output dir looking for a sibling.
         var dir = AppContext.BaseDirectory;
         for (var i = 0; i < 8 && dir is not null; i++)
         {
-            var candidate = Path.Combine(dir, "..", "concordex-sdk-spec");
+            var candidate = Path.Combine(dir, "..", "dmzagent-sdk-spec");
             if (Directory.Exists(candidate)) return Path.GetFullPath(candidate);
             dir = Directory.GetParent(dir)?.FullName;
         }
 
         // Fall back to a plausible relative path so the failure message
         // is informative rather than NullReferenceException.
-        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "concordex-sdk-spec"));
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "dmzagent-sdk-spec"));
     }
 }

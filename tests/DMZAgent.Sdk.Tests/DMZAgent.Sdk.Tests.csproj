@@ -11,9 +11,9 @@
       The spec repo is expected to live next to this one on disk during
       local dev, and CI lays it out the same way (see
       .github/workflows/spec-conformance.yml). The contract corpus path
-      can also be overridden via the CONCORDEX_SPEC_PATH env var.
+      can also be overridden via the DMZAGENT_SPEC_PATH env var.
     -->
-    <ConcordexSpecPath Condition="'$(ConcordexSpecPath)' == ''">$(MSBuildThisFileDirectory)..\..\..\concordex-sdk-spec</ConcordexSpecPath>
+    <DMZAgentSpecPath Condition="'$(DMZAgentSpecPath)' == ''">$(MSBuildThisFileDirectory)..\..\..\dmzagent-sdk-spec</DMZAgentSpecPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,7 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Concordex.Sdk\Concordex.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\DMZAgent.Sdk\DMZAgent.Sdk.csproj" />
   </ItemGroup>
 
 </Project>

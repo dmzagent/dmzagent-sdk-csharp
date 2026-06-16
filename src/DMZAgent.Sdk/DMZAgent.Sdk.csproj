@@ -2,25 +2,25 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
-    <RootNamespace>Concordex.Sdk</RootNamespace>
-    <AssemblyName>Concordex.Sdk</AssemblyName>
+    <RootNamespace>DMZAgent.Sdk</RootNamespace>
+    <AssemblyName>DMZAgent.Sdk</AssemblyName>
 
     <!-- NuGet package metadata -->
-    <PackageId>Concordex.Sdk</PackageId>
-    <Authors>Concordex</Authors>
+    <PackageId>DMZAgent.Sdk</PackageId>
+    <Authors>DMZAgent</Authors>
     <Company>Eastern Shore Solutions</Company>
-    <Product>Concordex SDK for .NET</Product>
+    <Product>DMZAgent SDK for .NET</Product>
     <Description>
-      Official .NET client for the Concordex agent-stream and circuit-breaker
-      APIs. Implements spec version $(ConcordexSpecVersion); use the exception
-      hierarchy and event helpers documented at https://spec.concordex.dev.
+      Official .NET client for the DMZAgent agent-stream and circuit-breaker
+      APIs. Implements spec version $(DMZAgentSpecVersion); use the exception
+      hierarchy and event helpers documented at https://spec.dmzagent.com.
     </Description>
-    <PackageTags>concordex;agents;observability;circuit-breaker;sdk</PackageTags>
+    <PackageTags>dmzagent;agents;observability;circuit-breaker;sdk</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <RepositoryUrl>https://github.com/praeceptor-thesis/concordex-sdk-csharp</RepositoryUrl>
+    <RepositoryUrl>https://github.com/praeceptor-thesis/dmzagent-sdk-csharp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageProjectUrl>https://spec.concordex.dev</PackageProjectUrl>
+    <PackageProjectUrl>https://spec.dmzagent.com</PackageProjectUrl>
 
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <IncludeBuildOutput>true</IncludeBuildOutput>
@@ -28,7 +28,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- CS1591: missing XML comment on public member
          CS1573: missing param tag in XML comment (pre-existing gaps in
-                 ConcordexClient.cs ToolResultAsync) -->
+                 DMZAgentClient.cs ToolResultAsync) -->
     <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
   </PropertyGroup>
 

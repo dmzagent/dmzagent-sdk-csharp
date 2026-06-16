@@ -1,6 +1,6 @@
 name: Spec Conformance
 
-# Runs the contract test corpus from concordex-sdk-spec against this SDK
+# Runs the contract test corpus from dmzagent-sdk-spec against this SDK
 # build, then reports the status check that promote.yml in the spec repo
 # verifies before dispatching publish.yml here.
 
@@ -30,7 +30,7 @@ jobs:
       - name: Resolve pinned spec version
         id: spec
         run: |
-          VERSION=$(grep -oP '<ConcordexSpecVersion>\K[^<]+' Directory.Build.props)
+          VERSION=$(grep -oP '<DMZAgentSpecVersion>\K[^<]+' Directory.Build.props)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Resolve spec checkout ref
@@ -49,10 +49,10 @@ jobs:
               ;;
           esac
 
-      - name: Check out concordex-sdk-spec
+      - name: Check out dmzagent-sdk-spec
         uses: actions/checkout@v4
         with:
-          repository: praeceptor-thesis/concordex-sdk-spec
+          repository: praeceptor-thesis/dmzagent-sdk-spec
           ref: ${{ steps.spec_ref.outputs.ref }}
           path: spec
 
@@ -77,8 +77,8 @@ jobs:
 
       - name: Run contract tests
         env:
-          CONCORDEX_SPEC_PATH: ${{ github.workspace }}/spec
-        run: dotnet test tests/Concordex.Sdk.Tests --configuration Release --logger "trx" --results-directory TestResults
+          DMZAGENT_SPEC_PATH: ${{ github.workspace }}/spec
+        run: dotnet test tests/DMZAgent.Sdk.Tests --configuration Release --logger "trx" --results-directory TestResults
 
       - name: Report status check
         if: always()

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace Concordex.Sdk.Concordia;
+namespace DMZAgent.Sdk.Concordia;
 
 /// <summary>Verdict returned by <c>enforce_covenant</c>. <c>Escalate</c>
 /// is reserved for a future state — MCP 1.0 returns allow / review / block.</summary>

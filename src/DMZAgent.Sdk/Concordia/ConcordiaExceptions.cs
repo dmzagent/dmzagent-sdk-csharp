@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Concordex.Sdk.Concordia;
+namespace DMZAgent.Sdk.Concordia;
 
 /// <summary>
 /// Base class for every error raised by the Concordia MCP client.
@@ -11,7 +11,7 @@ namespace Concordex.Sdk.Concordia;
 ///
 /// Every exception exposes <see cref="Code"/> (the JSON-RPC error
 /// code, or null for transport-level failures), <see cref="ErrorId"/>
-/// (the Concordex slug, e.g. <c>auth_expired</c>), and
+/// (the DMZAgent slug, e.g. <c>auth_expired</c>), and
 /// <see cref="ErrorData"/> (the raw <c>data</c> object from the envelope).
 /// </summary>
 public class ConcordiaException : Exception
@@ -21,7 +21,7 @@ public class ConcordiaException : Exception
     /// failures.</summary>
     public int? Code { get; }
 
-    /// <summary>The Concordex slug from <c>error.data.error_id</c>
+    /// <summary>The DMZAgent slug from <c>error.data.error_id</c>
     /// (e.g. <c>auth_expired</c>, <c>tenant_quota_exceeded</c>).
     /// <c>null</c> when the server didn't supply one.</summary>
     public string? ErrorId { get; }

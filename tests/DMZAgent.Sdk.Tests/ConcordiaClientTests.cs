@@ -4,10 +4,10 @@ using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Concordex.Sdk.Concordia;
+using DMZAgent.Sdk.Concordia;
 using Xunit;
 
-namespace Concordex.Sdk.Tests;
+namespace DMZAgent.Sdk.Tests;
 
 /// <summary>
 /// Wire-shape tests for <see cref="ConcordiaClient"/>. Uses the same
@@ -71,7 +71,7 @@ public class ConcordiaClientTests
     [Fact]
     public void Constructor_RequiresApiKey()
     {
-        Environment.SetEnvironmentVariable("CONCORDEX_API_KEY", null);
+        Environment.SetEnvironmentVariable("DMZAGENT_API_KEY", null);
         var ex = Assert.Throws<ConcordiaException>(() => new ConcordiaClient());
         Assert.Contains("apiKey required", ex.Message);
     }

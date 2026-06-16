@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (must match Directory.Build.props ConcordexSpecVersion)'
+        description: 'Version to publish (must match Directory.Build.props DMZAgentSpecVersion)'
         required: true
         type: string
 
@@ -46,7 +46,7 @@ jobs:
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          PINNED=$(grep -oP '<ConcordexSpecVersion>\K[^<]+' Directory.Build.props)
+          PINNED=$(grep -oP '<DMZAgentSpecVersion>\K[^<]+' Directory.Build.props)
           if [ "$PINNED" != "$VERSION" ]; then
             echo "::error::dispatch version $VERSION != Directory.Build.props $PINNED"
             exit 1
@@ -62,13 +62,13 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           dotnet build --configuration Release -p:Version="$VERSION"
-          dotnet pack src/Concordex.Sdk --configuration Release -p:Version="$VERSION" --output ./artifacts
+          dotnet pack src/DMZAgent.Sdk --configuration Release -p:Version="$VERSION" --output ./artifacts
 
       - name: Push to NuGet
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          dotnet nuget push "./artifacts/Concordex.Sdk.${{ steps.v.outputs.version }}.nupkg" \
+          dotnet nuget push "./artifacts/DMZAgent.Sdk.${{ steps.v.outputs.version }}.nupkg" \
             --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
@@ -77,7 +77,7 @@ jobs:
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          dotnet nuget push "./artifacts/Concordex.Sdk.${{ steps.v.outputs.version }}.snupkg" \
+          dotnet nuget push "./artifacts/DMZAgent.Sdk.${{ steps.v.outputs.version }}.snupkg" \
             --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate || true

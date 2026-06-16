@@ -1,6 +1,6 @@
-# Concordex.Sdk
+# DMZAgent.Sdk
 
-Official .NET client for the [Concordex](https://spec.concordex.dev)
+Official .NET client for the [DMZAgent](https://spec.dmzagent.com)
 agent-stream and circuit-breaker APIs.
 
 This package implements **spec version 0.5.0** — same constructor
@@ -11,7 +11,7 @@ the C# convention map in §8 of the spec.
 ## Install
 
 ```bash
-dotnet add package Concordex.Sdk
+dotnet add package DMZAgent.Sdk
 ```
 
 Target framework: **net8.0+**.
@@ -19,9 +19,9 @@ Target framework: **net8.0+**.
 ## Quick start
 
 ```csharp
-using Concordex.Sdk;
+using DMZAgent.Sdk;
 
-using var cx = new ConcordexClient(apiKey: "ck_live_...");
+using var cx = new DMZAgentClient(apiKey: "ck_live_...");
 
 await cx.SubjectSaysAsync(
     agentSubjectId: "user:ws:bot",
@@ -121,15 +121,15 @@ the conversation includes. `AddSubject(...)` extends it mid-flight.
 
 ## Webhook signature verification
 
-Concordex outbound webhooks are signed with HMAC-SHA256. Verify them
+DMZAgent outbound webhooks are signed with HMAC-SHA256. Verify them
 with the static helper:
 
 ```csharp
-using Concordex.Sdk.Webhook;
+using DMZAgent.Sdk.Webhook;
 
 var ok = WebhookSignature.Verify(
     payload:          rawRequestBody,
-    signatureHeader:  Request.Headers["Concordex-Signature"]!,
+    signatureHeader:  Request.Headers["DMZAgent-Signature"]!,
     secret:           "whsec_...",
     toleranceSeconds: 300);
 if (!ok) return Unauthorized();
@@ -143,11 +143,11 @@ or a signature mismatch. It runs in constant time.
 
 | Status / situation                                  | Type                              |
 |-----------------------------------------------------|-----------------------------------|
-| Base — all SDK errors                               | `ConcordexException`              |
-| 400 / client-side argument validation               | `ConcordexValidationException`    |
-| 401                                                 | `ConcordexAuthException`          |
-| 403                                                 | `ConcordexPermissionException`    |
-| 5xx, timeout, network failure                       | `ConcordexServerException`        |
+| Base — all SDK errors                               | `DMZAgentException`              |
+| 400 / client-side argument validation               | `DMZAgentValidationException`    |
+| 401                                                 | `DMZAgentAuthException`          |
+| 403                                                 | `DMZAgentPermissionException`    |
+| 5xx, timeout, network failure                       | `DMZAgentServerException`        |
 | `Guard(..., raiseOnOpen: true)` → blocked subject   | `CircuitBreakerOpenException`     |
 
 Every exception exposes `StatusCode` and `Body` (the parsed JSON
@@ -156,7 +156,7 @@ response or raw text). `CircuitBreakerOpenException` adds `Reason`,
 
 ## Resource lifecycle
 
-`ConcordexClient` and `Conversation` both implement `IDisposable`.
+`DMZAgentClient` and `Conversation` both implement `IDisposable`.
 Always wrap them in `using` — or call `.Close()` explicitly. Closing
 the client releases the underlying HTTP transport; calling close
 multiple times is a no-op.
@@ -166,15 +166,15 @@ multiple times is a no-op.
 | Parameter   | Default                          |
 |-------------|----------------------------------|
 | `apiKey`    | required, must start with `ck_`  |
-| `baseUrl`   | `https://api.concordex.dev`      |
+| `baseUrl`   | `https://api.dmzagent.com`      |
 | `timeout`   | 10 seconds                        |
-| `userAgent` | `concordex-csharp/0.5.0`         |
+| `userAgent` | `dmzagent-csharp/0.5.0`         |
 
 For testing or self-hosted environments, pass a custom
 `HttpMessageHandler`:
 
 ```csharp
-using var cx = new ConcordexClient(
+using var cx = new DMZAgentClient(
     apiKey: "ck_test_xxxxx",
     handler: new MyStubHandler(),
     baseUrl: "http://localhost:8080");
@@ -183,7 +183,7 @@ using var cx = new ConcordexClient(
 ## Spec conformance
 
 This SDK passes the contract-test corpus pinned at
-`concordex-sdk-spec@v0.5.0`. The conformance run lives in
+`dmzagent-sdk-spec@v0.5.0`. The conformance run lives in
 `.github/workflows/spec-conformance.yml`; it reports a status check of
 `spec-conformance/0.5.0` to the spec-coordination workflow.
 

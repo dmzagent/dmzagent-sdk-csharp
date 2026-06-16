@@ -4,7 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Concordex.Sdk;
+namespace DMZAgent.Sdk;
 
 /// <summary>
 /// Stateful handle for a single interaction (sdk-spec.md §6).
@@ -15,7 +15,7 @@ namespace Concordex.Sdk;
 /// <c>subjects</c> array sent on every event.
 ///
 /// <para>
-/// Constructed via <see cref="ConcordexClient.Conversation"/>. Direct
+/// Constructed via <see cref="DMZAgentClient.Conversation"/>. Direct
 /// construction is not part of the public API.
 /// </para>
 ///
@@ -34,14 +34,15 @@ public sealed class Conversation : IDisposable
 {
     // Roles the SDK treats as "this participant is an agent for the
     // wire protocol's agent_subject_id requirement." Mirrors the
-    // Python reference impl — see sdks/python/concordex/conversation.py.
+    // Python reference impl — see sdks/python/dmzagent/conversation.py.
     private static readonly HashSet<string> AgentRoles = new(StringComparer.OrdinalIgnoreCase)
     {
         "agent", "service", "system",
     };
 
-    private readonly ConcordexClient                                       _client;
+    private readonly DMZAgentClient                                       _client;
     private readonly string                                                _agentSubjectId;
+    private readonly string                                                _subjectType;
     private readonly string                                                _interactionKind;
     private readonly IReadOnlyDictionary<string, object?>?                 _metadata;
     private readonly List<Dictionary<string, object?>>                     _subjects;
@@ -50,7 +51,7 @@ public sealed class Conversation : IDisposable
     private bool    _disposed;
 
     internal Conversation(
-        ConcordexClient                                     client,
+        DMZAgentClient                                     client,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> participants,
         string?                                             agentSubjectId,
         string                                              interactionKind,
@@ -58,7 +59,7 @@ public sealed class Conversation : IDisposable
     {
         if (participants is null || participants.Count == 0)
         {
-            throw new ConcordexValidationException("participants must be a non-empty list");
+            throw new DMZAgentValidationException("participants must be a non-empty list");
         }
 
         var roster = new List<Dictionary<string, object?>>(participants.Count);
@@ -67,7 +68,7 @@ public sealed class Conversation : IDisposable
             var p = participants[i];
             if (p is null || !p.TryGetValue("subject_id", out var sidObj) || sidObj is not string sid || string.IsNullOrWhiteSpace(sid))
             {
-                throw new ConcordexValidationException($"participants[{i}] missing subject_id");
+                throw new DMZAgentValidationException($"participants[{i}] missing subject_id");
             }
             var entry = new Dictionary<string, object?>
             {
@@ -75,6 +76,8 @@ public sealed class Conversation : IDisposable
                 ["role"]       = p.TryGetValue("role", out var r) && r is string rs && !string.IsNullOrEmpty(rs) ? rs : "other",
                 ["kind"]       = p.TryGetValue("kind", out var k) && k is string ks && !string.IsNullOrEmpty(ks) ? ks : "other",
             };
+            if (p.TryGetValue("subject_type", out var st) && st is string sts && !string.IsNullOrEmpty(sts))
+                entry["subject_type"] = sts;
             if (p.TryGetValue("metadata", out var md)) entry["metadata"] = md;
             roster.Add(entry);
         }
@@ -89,6 +92,7 @@ public sealed class Conversation : IDisposable
 
         _client          = client;
         _agentSubjectId  = agentSubjectId!;
+        _subjectType     = DeriveSubjectType(roster);
         _interactionKind = interactionKind;
         _metadata        = metadata;
         _subjects        = roster;
@@ -124,7 +128,7 @@ public sealed class Conversation : IDisposable
     {
         if (string.IsNullOrWhiteSpace(subjectId))
         {
-            throw new ConcordexValidationException("subjectId is required");
+            throw new DMZAgentValidationException("subjectId is required");
         }
 
         var newEntry = new Dictionary<string, object?>
@@ -161,6 +165,7 @@ public sealed class Conversation : IDisposable
             subjectId:        subjectId,
             text:              text,
             agentSubjectId:   _agentSubjectId,
+            subjectType:      _subjectType,
             interactionId:    _interactionId,
             subjects:         RosterAsReadonly(),
             payloadExtra:     payloadExtra,
@@ -179,6 +184,7 @@ public sealed class Conversation : IDisposable
         var r = await _client.ToolCallAsync(
             subjectId:         subjectId,
             tool:              tool,
+            subjectType:       _subjectType,
             args:              args,
             interactionId:     _interactionId,
             subjects:          RosterAsReadonly(),
@@ -197,6 +203,7 @@ public sealed class Conversation : IDisposable
         var r = await _client.ToolResultAsync(
             subjectId:         subjectId,
             tool:              tool,
+            subjectType:       _subjectType,
             result:            result,
             interactionId:     _interactionId,
             subjects:          RosterAsReadonly(),
@@ -214,6 +221,7 @@ public sealed class Conversation : IDisposable
             agentSubjectId:    _agentSubjectId,
             subjects:          RosterAsReadonly(),
             payload:           payload,
+            subjectType:       _subjectType,
             interactionId:     _interactionId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
         CaptureInteractionId(r);
@@ -253,6 +261,16 @@ public sealed class Conversation : IDisposable
     // =================================================================== //
     // Internal                                                            //
     // =================================================================== //
+
+    private static string DeriveSubjectType(List<Dictionary<string, object?>> roster)
+    {
+        foreach (var p in roster)
+        {
+            if (p.TryGetValue("subject_type", out var st) && st is string sts && !string.IsNullOrEmpty(sts))
+                return sts;
+        }
+        return "chat";
+    }
 
     private IReadOnlyList<IReadOnlyDictionary<string, object?>> RosterAsReadonly()
     {

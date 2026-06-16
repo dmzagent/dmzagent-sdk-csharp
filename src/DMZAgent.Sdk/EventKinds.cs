@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace Concordex.Sdk;
+namespace DMZAgent.Sdk;
 
 /// <summary>
 /// Canonical event-kind constants per sdk-spec.md §8.6.
@@ -21,7 +21,7 @@ public static class EventKinds
     /// <summary>
     /// Every accepted <c>kind</c> value, in spec order. The wire enum is
     /// closed; the server rejects anything outside this list with HTTP
-    /// 400, and so does <see cref="ConcordexClient.EmitEventAsync"/>
+    /// 400, and so does <see cref="DMZAgentClient.EmitEventAsync"/>
     /// before the request leaves the process.
     /// </summary>
     public static IReadOnlyList<string> All { get; } = new[]
@@ -30,5 +30,13 @@ public static class EventKinds
         ToolCall,
         ToolResult,
         Observation,
+    };
+
+    /// <summary>
+    /// Valid subject_type values per sdk-spec.md §5.1.
+    /// </summary>
+    public static readonly HashSet<string> ValidSubjectTypes = new(StringComparer.Ordinal)
+    {
+        "chat", "sensor", "lead", "ticket", "journey",
     };
 }

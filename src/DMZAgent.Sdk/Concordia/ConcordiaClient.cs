@@ -10,12 +10,12 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Concordex.Sdk.Concordia;
+namespace DMZAgent.Sdk.Concordia;
 
 /// <summary>
-/// Concordia MCP 1.0 client — the governance side of Concordex.
+/// Concordia MCP 1.0 client — the governance side of DMZAgent.
 ///
-/// Companion to <see cref="ConcordexClient"/> for the agent-stream
+/// Companion to <see cref="DMZAgentClient"/> for the agent-stream
 /// surface. Customer agents speak MCP 1.0 over JSON-RPC against
 /// <c>/mcp/v1</c> to enforce covenants, record audit decisions,
 /// query installed Canons, and read soul snapshots on subjects.
@@ -47,13 +47,13 @@ namespace Concordex.Sdk.Concordia;
 public sealed class ConcordiaClient : IDisposable
 {
     /// <summary>Production base URL.</summary>
-    public const string DefaultBaseUrl = "https://api.concordex.dev";
+    public const string DefaultBaseUrl = "https://api.dmzagent.com";
 
     /// <summary>Default per-request timeout.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>User-Agent header on every request.</summary>
-    public static readonly string DefaultUserAgent = "concordex-concordia-csharp/0.6.0";
+    public static readonly string DefaultUserAgent = "dmzagent-concordia-csharp/0.6.0";
 
     private const string McpPath = "/mcp/v1";
 
@@ -92,9 +92,9 @@ public sealed class ConcordiaClient : IDisposable
     /// </summary>
     /// <param name="apiKey">Workspace-scoped API key. Must start with
     /// <c>ck_</c>; throws <see cref="ConcordiaException"/> otherwise.
-    /// If null, reads <c>CONCORDEX_API_KEY</c> from the environment.</param>
+    /// If null, reads <c>DMZAGENT_API_KEY</c> from the environment.</param>
     /// <param name="baseUrl">Override the default
-    /// <c>https://api.concordex.dev</c> (e.g. for staging or local dev).</param>
+    /// <c>https://api.dmzagent.com</c> (e.g. for staging or local dev).</param>
     /// <param name="timeout">Per-request timeout; defaults to 10s.</param>
     /// <param name="userAgent">Override User-Agent header.</param>
     /// <param name="handler">Inject a custom
@@ -106,16 +106,16 @@ public sealed class ConcordiaClient : IDisposable
         string? userAgent = null,
         HttpMessageHandler? handler = null)
     {
-        var key = apiKey ?? Environment.GetEnvironmentVariable("CONCORDEX_API_KEY") ?? "";
+        var key = apiKey ?? Environment.GetEnvironmentVariable("DMZAGENT_API_KEY") ?? "";
         if (string.IsNullOrEmpty(key))
         {
             throw new ConcordiaException(
-                "apiKey required (pass apiKey or set CONCORDEX_API_KEY)");
+                "apiKey required (pass apiKey or set DMZAGENT_API_KEY)");
         }
         if (!key.StartsWith("ck_", StringComparison.Ordinal))
         {
             throw new ConcordiaException(
-                "apiKey must start with 'ck_' — double-check you copied a Concordex key, not another service's token");
+                "apiKey must start with 'ck_' — double-check you copied a DMZAgent key, not another service's token");
         }
 
         _baseUrl = (baseUrl ?? DefaultBaseUrl).TrimEnd('/');

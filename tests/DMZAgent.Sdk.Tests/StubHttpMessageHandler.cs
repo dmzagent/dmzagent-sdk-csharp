@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Concordex.Sdk.Tests;
+namespace DMZAgent.Sdk.Tests;
 
 /// <summary>
 /// Stub <see cref="HttpMessageHandler"/> per contract-tests runner spec

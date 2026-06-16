@@ -1,9 +1,9 @@
 using System;
 
-namespace Concordex.Sdk;
+namespace DMZAgent.Sdk;
 
 /// <summary>
-/// Disposable handle returned by <see cref="ConcordexClient.GuardAsync"/>
+/// Disposable handle returned by <see cref="DMZAgentClient.GuardAsync"/>
 /// and <see cref="Conversation.GuardAsync"/>. Per sdk-spec.md §5.7 the
 /// C# binding exposes a <see cref="Result"/> property reachable from a
 /// <c>using</c> block:

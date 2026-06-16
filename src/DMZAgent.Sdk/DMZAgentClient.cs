@@ -9,13 +9,13 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Concordex.Sdk;
+namespace DMZAgent.Sdk;
 
 /// <summary>
-/// The Concordex client — primary entry point for the .NET SDK.
+/// The DMZAgent client — primary entry point for the .NET SDK.
 ///
 /// Per sdk-spec.md §4 / §8.1 the C# binding renames the canonical
-/// <c>Concordex</c> class to <c>ConcordexClient</c> (the language
+/// <c>DMZAgent</c> class to <c>DMZAgentClient</c> (the language
 /// reserves bare type names for value-bearing entities; service classes
 /// take a <c>Client</c> suffix).
 ///
@@ -27,7 +27,7 @@ namespace Concordex.Sdk;
 ///
 /// <example>
 /// <code>
-/// using var cx = new ConcordexClient("ck_live_…");
+/// using var cx = new DMZAgentClient("ck_live_…");
 ///
 /// await cx.SubjectSaysAsync(
 ///     agentSubjectId: "user:ws:bot",
@@ -39,19 +39,19 @@ namespace Concordex.Sdk;
 /// </code>
 /// </example>
 /// </summary>
-public sealed class ConcordexClient : IDisposable
+public sealed class DMZAgentClient : IDisposable
 {
     /// <summary>Public default per sdk-spec.md §1.1.</summary>
-    public const string DefaultBaseUrl = "https://api.concordex.dev";
+    public const string DefaultBaseUrl = "https://api.dmzagent.com";
 
     /// <summary>Public default per sdk-spec.md §1.5.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>Spec version this build targets. Bumped via Directory.Build.props.</summary>
-    public const string SpecVersion = "0.5.0";
+    public const string SpecVersion = "0.6.0";
 
     /// <summary>The User-Agent set on every request per sdk-spec.md §1.4.</summary>
-    public static readonly string DefaultUserAgent = $"concordex-csharp/{SpecVersion}";
+    public static readonly string DefaultUserAgent = $"dmzagent-csharp/{SpecVersion}";
 
     // JSON options used for every wire body. Spec-conformance lives or
     // dies here: the golden-envelopes corpus compares POST bodies after
@@ -77,6 +77,8 @@ public sealed class ConcordexClient : IDisposable
     private readonly HttpClient _http;
     private readonly bool       _ownsHttpClient;
     private readonly string     _baseUrl;
+    private readonly string     _apiKey;
+    private readonly string     _userAgent;
     private          bool       _disposed;
 
     /// <summary>
@@ -85,9 +87,9 @@ public sealed class ConcordexClient : IDisposable
     /// <param name="apiKey">Workspace API key, must start with <c>ck_</c>.</param>
     /// <param name="baseUrl">Override for staging / self-hosted (default <see cref="DefaultBaseUrl"/>).</param>
     /// <param name="timeout">Per-request timeout (default 10 s).</param>
-    /// <param name="userAgent">Override User-Agent (default <c>concordex-csharp/&lt;spec-version&gt;</c>).</param>
-    /// <exception cref="ConcordexValidationException">When <paramref name="apiKey"/> is empty or doesn't start with <c>ck_</c>.</exception>
-    public ConcordexClient(
+    /// <param name="userAgent">Override User-Agent (default <c>dmzagent-csharp/&lt;spec-version&gt;</c>).</param>
+    /// <exception cref="DMZAgentValidationException">When <paramref name="apiKey"/> is empty or doesn't start with <c>ck_</c>.</exception>
+    public DMZAgentClient(
         string   apiKey,
         string?  baseUrl   = null,
         TimeSpan? timeout  = null,
@@ -102,7 +104,7 @@ public sealed class ConcordexClient : IDisposable
     /// harness uses to drive a stub transport (sdk-spec.md §10 / runner
     /// step 2).
     /// </summary>
-    public ConcordexClient(
+    public DMZAgentClient(
         string               apiKey,
         HttpMessageHandler?  handler,
         string?              baseUrl   = null,
@@ -113,11 +115,13 @@ public sealed class ConcordexClient : IDisposable
         // are both bounced at construction, before any request goes out.
         if (string.IsNullOrEmpty(apiKey) || !apiKey.StartsWith("ck_", StringComparison.Ordinal))
         {
-            throw new ConcordexValidationException(
+            throw new DMZAgentValidationException(
                 "api_key must start with 'ck_' — get one from your tenant_admin");
         }
 
-        _baseUrl = (baseUrl ?? DefaultBaseUrl).TrimEnd('/');
+        _baseUrl   = (baseUrl ?? DefaultBaseUrl).TrimEnd('/');
+        _apiKey    = apiKey;
+        _userAgent = userAgent ?? DefaultUserAgent;
 
         if (handler is null)
         {
@@ -132,12 +136,12 @@ public sealed class ConcordexClient : IDisposable
 
         _http.Timeout = timeout ?? DefaultTimeout;
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent ?? DefaultUserAgent);
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd(_userAgent);
     }
 
     /// <summary>Construct a client that reuses a caller-managed
     /// <see cref="HttpClient"/>. The SDK will NOT dispose it.</summary>
-    public ConcordexClient(
+    public DMZAgentClient(
         string      apiKey,
         HttpClient  httpClient,
         string?     baseUrl   = null,
@@ -145,11 +149,13 @@ public sealed class ConcordexClient : IDisposable
     {
         if (string.IsNullOrEmpty(apiKey) || !apiKey.StartsWith("ck_", StringComparison.Ordinal))
         {
-            throw new ConcordexValidationException(
+            throw new DMZAgentValidationException(
                 "api_key must start with 'ck_' — get one from your tenant_admin");
         }
 
         _baseUrl        = (baseUrl ?? DefaultBaseUrl).TrimEnd('/');
+        _apiKey         = apiKey;
+        _userAgent      = userAgent ?? DefaultUserAgent;
         _http           = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _ownsHttpClient = false;
 
@@ -166,9 +172,10 @@ public sealed class ConcordexClient : IDisposable
     /// Low-level event emitter (sdk-spec.md §5.1). Every higher-level
     /// helper lands here.
     /// </summary>
-    /// <exception cref="ConcordexValidationException">When <paramref name="kind"/> is not in <see cref="EventKinds.All"/>.</exception>
+    /// <exception cref="DMZAgentValidationException">When <paramref name="kind"/> is not in <see cref="EventKinds.All"/>.</exception>
     public Task<EmitResult> EmitEventAsync(
         string                                       kind,
+        string                                       subjectType,
         string                                       agentSubjectId,
         IReadOnlyDictionary<string, object?>?        payload          = null,
         string?                                      interactionId    = null,
@@ -182,17 +189,23 @@ public sealed class ConcordexClient : IDisposable
     {
         if (!EventKinds.All.Contains(kind))
         {
-            throw new ConcordexValidationException(
+            throw new DMZAgentValidationException(
                 $"kind must be one of [{string.Join(", ", EventKinds.All)}], got '{kind}'");
+        }
+        if (string.IsNullOrEmpty(subjectType) || !EventKinds.ValidSubjectTypes.Contains(subjectType))
+        {
+            throw new DMZAgentValidationException(
+                $"subjectType must be one of [{string.Join(", ", EventKinds.ValidSubjectTypes)}], got '{subjectType}'");
         }
         if (string.IsNullOrEmpty(agentSubjectId))
         {
-            throw new ConcordexValidationException("agent_subject_id is required");
+            throw new DMZAgentValidationException("agent_subject_id is required");
         }
 
         var body = new Dictionary<string, object?>
         {
             ["kind"]             = kind,
+            ["subject_type"]     = subjectType,
             ["agent_subject_id"] = agentSubjectId,
             ["payload"]          = payload ?? new Dictionary<string, object?>(),
         };
@@ -216,6 +229,7 @@ public sealed class ConcordexClient : IDisposable
         string                                       subjectId,
         string                                       text,
         string                                       agentSubjectId,
+        string                                       subjectType,
         string?                                      interactionId    = null,
         IReadOnlyList<IReadOnlyDictionary<string, object?>>? subjects = null,
         IReadOnlyDictionary<string, object?>?        payloadExtra     = null,
@@ -223,9 +237,9 @@ public sealed class ConcordexClient : IDisposable
     {
         if (string.IsNullOrEmpty(agentSubjectId))
         {
-            throw new ConcordexValidationException(
+            throw new DMZAgentValidationException(
                 "agentSubjectId is required — every event is grounded against an agent identity " +
-                "(use ConcordexClient.Conversation(...) to avoid passing this on every call)");
+                "(use DMZAgentClient.Conversation(...) to avoid passing this on every call)");
         }
 
         var payload = new Dictionary<string, object?> { ["text"] = text };
@@ -235,12 +249,13 @@ public sealed class ConcordexClient : IDisposable
         }
 
         return EmitEventAsync(
-            kind:             EventKinds.SubjectSays,
-            agentSubjectId:   agentSubjectId,
-            payload:          payload,
-            interactionId:    interactionId,
-            subjects:         subjects,
-            speakerSubjectId: subjectId,
+            kind:              EventKinds.SubjectSays,
+            subjectType:       subjectType,
+            agentSubjectId:    agentSubjectId,
+            payload:           payload,
+            interactionId:     interactionId,
+            subjects:          subjects,
+            speakerSubjectId:  subjectId,
             cancellationToken: cancellationToken);
     }
 
@@ -252,6 +267,7 @@ public sealed class ConcordexClient : IDisposable
     public Task<EmitResult> ToolCallAsync(
         string                                       subjectId,
         string                                       tool,
+        string                                       subjectType,
         IReadOnlyDictionary<string, object?>?        args             = null,
         string?                                      interactionId    = null,
         IReadOnlyList<IReadOnlyDictionary<string, object?>>? subjects = null,
@@ -263,13 +279,14 @@ public sealed class ConcordexClient : IDisposable
             ["args"] = args ?? new Dictionary<string, object?>(),
         };
         return EmitEventAsync(
-            kind:             EventKinds.ToolCall,
-            agentSubjectId:   subjectId,
-            payload:          payload,
-            interactionId:    interactionId,
-            subjects:         subjects,
-            speakerSubjectId: subjectId,
-            speakerRole:      "agent",
+            kind:              EventKinds.ToolCall,
+            subjectType:       subjectType,
+            agentSubjectId:    subjectId,
+            payload:           payload,
+            interactionId:     interactionId,
+            subjects:          subjects,
+            speakerSubjectId:  subjectId,
+            speakerRole:       "agent",
             cancellationToken: cancellationToken);
     }
 
@@ -281,6 +298,7 @@ public sealed class ConcordexClient : IDisposable
     public Task<EmitResult> ToolResultAsync(
         string                                       subjectId,
         string                                       tool,
+        string                                       subjectType,
         object?                                      result,
         string?                                      interactionId    = null,
         IReadOnlyList<IReadOnlyDictionary<string, object?>>? subjects = null,
@@ -292,12 +310,13 @@ public sealed class ConcordexClient : IDisposable
             ["result"] = result,
         };
         return EmitEventAsync(
-            kind:             EventKinds.ToolResult,
-            agentSubjectId:   subjectId,
-            payload:          payload,
-            interactionId:    interactionId,
-            subjects:         subjects,
-            speakerSubjectId: subjectId,
+            kind:              EventKinds.ToolResult,
+            subjectType:       subjectType,
+            agentSubjectId:    subjectId,
+            payload:           payload,
+            interactionId:     interactionId,
+            subjects:          subjects,
+            speakerSubjectId:  subjectId,
             cancellationToken: cancellationToken);
     }
 
@@ -310,15 +329,17 @@ public sealed class ConcordexClient : IDisposable
         string                                       agentSubjectId,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> subjects,
         IReadOnlyDictionary<string, object?>         payload,
+        string                                       subjectType,
         string?                                      interactionId    = null,
         CancellationToken                            cancellationToken = default)
     {
         return EmitEventAsync(
-            kind:           EventKinds.Observation,
-            agentSubjectId: agentSubjectId,
-            payload:        payload,
-            interactionId:  interactionId,
-            subjects:       subjects,
+            kind:              EventKinds.Observation,
+            subjectType:       subjectType,
+            agentSubjectId:    agentSubjectId,
+            payload:           payload,
+            interactionId:     interactionId,
+            subjects:          subjects,
             cancellationToken: cancellationToken);
     }
 
@@ -330,7 +351,7 @@ public sealed class ConcordexClient : IDisposable
     /// Synchronous circuit-breaker check (sdk-spec.md §5.6). Pass EXACTLY
     /// ONE of <paramref name="subjectId"/> or <paramref name="interactionId"/>.
     /// </summary>
-    /// <exception cref="ConcordexValidationException">When neither or both arguments are set.</exception>
+    /// <exception cref="DMZAgentValidationException">When neither or both arguments are set.</exception>
     public async Task<CheckResult> CheckAsync(
         string?           subjectId      = null,
         string?           interactionId  = null,
@@ -340,7 +361,7 @@ public sealed class ConcordexClient : IDisposable
         var hasInteraction = !string.IsNullOrEmpty(interactionId);
         if (hasSubject == hasInteraction)
         {
-            throw new ConcordexValidationException("pass exactly one of subjectId or interactionId");
+            throw new DMZAgentValidationException("pass exactly one of subjectId or interactionId");
         }
 
         var scope    = hasSubject ? "subject" : "interaction";
@@ -408,6 +429,158 @@ public sealed class ConcordexClient : IDisposable
     }
 
     // =================================================================== //
+    // Capture — POST /v1/agent-stream/event                               //
+    // =================================================================== //
+
+    /// <summary>
+    /// Ingest a single behavior event and return the accepted-only ack
+    /// (sdk-spec.md §5.9).
+    /// </summary>
+    public async Task<CaptureResult> CaptureAsync(
+        string                                              subjectId,
+        string                                              kind,
+        string                                              subjectType,
+        IReadOnlyDictionary<string, object?>?               payload          = null,
+        string?                                             agentSubjectId   = null,
+        string?                                             interactionId    = null,
+        string?                                             interactionKind  = "chat_session",
+        IReadOnlyList<IReadOnlyDictionary<string, object?>>? subjects        = null,
+        string?                                             speakerSubjectId = null,
+        string?                                             speakerRole      = null,
+        string?                                             occurredAt       = null,
+        IReadOnlyDictionary<string, object?>?               metadata         = null,
+        CancellationToken                                   cancellationToken = default)
+    {
+        if (!EventKinds.All.Contains(kind))
+        {
+            throw new DMZAgentValidationException(
+                $"kind must be one of [{string.Join(", ", EventKinds.All)}], got '{kind}'");
+        }
+        if (string.IsNullOrEmpty(subjectType) || !EventKinds.ValidSubjectTypes.Contains(subjectType))
+        {
+            throw new DMZAgentValidationException(
+                $"subjectType must be one of [{string.Join(", ", EventKinds.ValidSubjectTypes)}], got '{subjectType}'");
+        }
+        if (string.IsNullOrEmpty(subjectId))
+        {
+            throw new DMZAgentValidationException("subject_id is required");
+        }
+
+        var body = new Dictionary<string, object?>
+        {
+            ["kind"]         = kind,
+            ["subject_id"]   = subjectId,
+            ["subject_type"] = subjectType,
+            ["payload"]      = payload ?? new Dictionary<string, object?>(),
+        };
+        if (!string.IsNullOrEmpty(agentSubjectId))  body["agent_subject_id"] = agentSubjectId;
+        if (!string.IsNullOrEmpty(interactionId))    body["interaction_id"] = interactionId;
+        if (!string.IsNullOrEmpty(interactionKind))  body["interaction_kind"] = interactionKind;
+        if (subjects is { Count: > 0 })              body["subjects"] = subjects;
+        if (!string.IsNullOrEmpty(speakerSubjectId)) body["speaker_subject_id"] = speakerSubjectId;
+        if (!string.IsNullOrEmpty(speakerRole))      body["speaker_role"] = speakerRole;
+        if (!string.IsNullOrEmpty(occurredAt))       body["occurred_at"] = occurredAt;
+        if (metadata is { Count: > 0 })              body["metadata"] = metadata;
+
+        var raw = await PostJsonAsync("/v1/agent-stream/event", body, cancellationToken).ConfigureAwait(false);
+        return ParseCaptureResult(raw);
+    }
+
+    // =================================================================== //
+    // AwaitOutcome — GET /v1/frames/{id}/story                            //
+    // =================================================================== //
+
+    /// <summary>
+    /// Poll the frame story endpoint until reasoning completes
+    /// (sdk-spec.md §5.10).
+    /// </summary>
+    public async Task<OutcomeResult> AwaitOutcomeAsync(
+        string            frameId,
+        double            timeoutSeconds = 30.0,
+        CancellationToken cancellationToken = default)
+    {
+        timeoutSeconds = Math.Min(timeoutSeconds, 120.0);
+        var start = DateTime.UtcNow;
+        var timeout = TimeSpan.FromSeconds(timeoutSeconds);
+        var delay = TimeSpan.FromMilliseconds(100);
+        var maxDelay = TimeSpan.FromSeconds(2);
+        Exception? lastError = null;
+        var path = $"/v1/frames/{Uri.EscapeDataString(frameId)}/story";
+
+        while (DateTime.UtcNow - start < timeout)
+        {
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var raw = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false);
+                return ParseOutcomeResult(raw);
+            }
+            catch (DMZAgentValidationException) { throw; }
+            catch (DMZAgentAuthException) { throw; }
+            catch (DMZAgentPermissionException) { throw; }
+            catch (Exception ex) { lastError = ex; }
+
+            delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, maxDelay.TotalMilliseconds));
+        }
+        throw new DMZAgentServerException($"await_outcome timed out after {timeoutSeconds}s for frame {frameId}",
+            statusCode: null, body: lastError?.Message);
+    }
+
+    // =================================================================== //
+    // Notification prefs — GET/PUT /v1/settings/notifications              //
+    // =================================================================== //
+
+    /// <summary>
+    /// Fetch the current API key's notification preferences
+    /// (sdk-spec.md §5.12).
+    /// </summary>
+    public async Task<NotificationPrefs> GetNotificationPrefsAsync(CancellationToken cancellationToken = default)
+    {
+        var raw = await GetJsonAsync("/v1/settings/notifications", cancellationToken).ConfigureAwait(false);
+        return ParseNotificationPrefs(raw);
+    }
+
+    /// <summary>
+    /// Update notification preferences (sdk-spec.md §5.13).
+    /// </summary>
+    public async Task<NotificationPrefs> UpdateNotificationPrefsAsync(
+        IReadOnlyDictionary<string, object?> prefs,
+        CancellationToken cancellationToken = default)
+    {
+        var raw = await PutJsonAsync("/v1/settings/notifications", prefs, cancellationToken).ConfigureAwait(false);
+        return ParseNotificationPrefs(raw);
+    }
+
+    // =================================================================== //
+    // Division config — GET/PUT /v1/divisions/{id}/config                  //
+    // =================================================================== //
+
+    /// <summary>
+    /// Read a division's JSON configuration blob (sdk-spec.md §5.14).
+    /// </summary>
+    public async Task<DivisionConfig> GetDivisionConfigAsync(
+        string divisionId,
+        CancellationToken cancellationToken = default)
+    {
+        var path = $"/v1/divisions/{Uri.EscapeDataString(divisionId)}/config";
+        var raw = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false);
+        return ParseDivisionConfig(raw);
+    }
+
+    /// <summary>
+    /// Replace a division's full JSON configuration blob (sdk-spec.md §5.15).
+    /// </summary>
+    public async Task<DivisionConfig> UpdateDivisionConfigAsync(
+        string divisionId,
+        IReadOnlyDictionary<string, object?> config,
+        CancellationToken cancellationToken = default)
+    {
+        var path = $"/v1/divisions/{Uri.EscapeDataString(divisionId)}/config";
+        var raw = await PutJsonAsync(path, config, cancellationToken).ConfigureAwait(false);
+        return ParseDivisionConfig(raw);
+    }
+
+    // =================================================================== //
     // Lifecycle                                                            //
     // =================================================================== //
 
@@ -434,12 +607,40 @@ public sealed class ConcordexClient : IDisposable
         return ParseEmitResult(raw);
     }
 
+    internal async Task<JsonElement> GetJsonAsync(string path, CancellationToken cancellationToken)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(DMZAgentClient));
+
+        var url = $"{_baseUrl}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        ApplyRequestAuth(request);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new DMZAgentServerException($"timeout calling {path}: {ex.Message}", innerException: ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new DMZAgentServerException($"network error calling {path}: {ex.Message}", innerException: ex);
+        }
+
+        using (response)
+        {
+            return await HandleResponseAsync(response, path, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     internal async Task<JsonElement> PostJsonAsync(
         string                          path,
         IReadOnlyDictionary<string, object?> body,
         CancellationToken               cancellationToken)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(ConcordexClient));
+        if (_disposed) throw new ObjectDisposedException(nameof(DMZAgentClient));
 
         var url     = $"{_baseUrl}{path}";
         var payload = JsonSerializer.SerializeToUtf8Bytes(body, WireJson);
@@ -449,22 +650,7 @@ public sealed class ConcordexClient : IDisposable
             Content = new ByteArrayContent(payload),
         };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-
-        // When constructed with a caller-supplied HttpClient we don't
-        // own the default headers; ensure our auth + UA still attach
-        // per-request (DefaultRequestHeaders on a shared client would
-        // mutate it for unrelated callers).
-        if (!_ownsHttpClient)
-        {
-            if (_http.DefaultRequestHeaders.Authorization is null)
-            {
-                // Caller didn't pre-wire it; in this overload they're
-                // sharing a generic HttpClient — but we already set our
-                // own auth header via the constructor path that takes a
-                // handler, not this one. The shared-HttpClient path is
-                // documented as caller-responsibility for auth.
-            }
-        }
+        ApplyRequestAuth(request);
 
         HttpResponseMessage response;
         try
@@ -473,17 +659,60 @@ public sealed class ConcordexClient : IDisposable
         }
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new ConcordexServerException($"timeout calling {path}: {ex.Message}", innerException: ex);
+            throw new DMZAgentServerException($"timeout calling {path}: {ex.Message}", innerException: ex);
         }
         catch (HttpRequestException ex)
         {
-            throw new ConcordexServerException($"network error calling {path}: {ex.Message}", innerException: ex);
+            throw new DMZAgentServerException($"network error calling {path}: {ex.Message}", innerException: ex);
         }
 
         using (response)
         {
             return await HandleResponseAsync(response, path, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    internal async Task<JsonElement> PutJsonAsync(
+        string                          path,
+        IReadOnlyDictionary<string, object?> body,
+        CancellationToken               cancellationToken)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(DMZAgentClient));
+
+        var url     = $"{_baseUrl}{path}";
+        var payload = JsonSerializer.SerializeToUtf8Bytes(body, WireJson);
+
+        using var request = new HttpRequestMessage(HttpMethod.Put, url)
+        {
+            Content = new ByteArrayContent(payload),
+        };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        ApplyRequestAuth(request);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new DMZAgentServerException($"timeout calling {path}: {ex.Message}", innerException: ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new DMZAgentServerException($"network error calling {path}: {ex.Message}", innerException: ex);
+        }
+
+        using (response)
+        {
+            return await HandleResponseAsync(response, path, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void ApplyRequestAuth(HttpRequestMessage request)
+    {
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+        request.Headers.UserAgent.ParseAdd(_userAgent);
     }
 
     private static async Task<JsonElement> HandleResponseAsync(HttpResponseMessage response, string path, CancellationToken cancellationToken)
@@ -516,15 +745,15 @@ public sealed class ConcordexClient : IDisposable
 
         throw status switch
         {
-            400 => new ConcordexValidationException(
+            400 => new DMZAgentValidationException(
                 $"server rejected request to {path}: {detail}", status, bodyForException),
-            401 => new ConcordexAuthException(
+            401 => new DMZAgentAuthException(
                 "invalid or revoked API key", status, bodyForException),
-            403 => new ConcordexPermissionException(
+            403 => new DMZAgentPermissionException(
                 "API key lacks required scope for this operation", status, bodyForException),
-            >= 500 => new ConcordexServerException(
+            >= 500 => new DMZAgentServerException(
                 $"server error from {path} ({status}): {detail}", status, bodyForException),
-            _ => new ConcordexException(
+            _ => new DMZAgentException(
                 $"unexpected status {status} from {path}", status, bodyForException),
         };
     }
@@ -549,6 +778,7 @@ public sealed class ConcordexClient : IDisposable
         string?                interactionId  = OptString(raw, "interaction_id");
         IReadOnlyList<string>? subjectsList   = OptStringArray(raw, "subjects");
         bool                   queued         = OptBool(raw, "queued") ?? false;
+        bool?                  accepted       = OptBool(raw, "accepted");
         string?                frameId        = OptString(raw, "frame_id");
         string?                subjectId      = OptString(raw, "subject_id");
         string?                outcome        = OptString(raw, "outcome");
@@ -563,6 +793,7 @@ public sealed class ConcordexClient : IDisposable
             InteractionId:  interactionId ?? string.Empty,
             Subjects:       subjectsList ?? Array.Empty<string>(),
             Queued:         queued,
+            Accepted:       accepted,
             FrameId:        frameId,
             SubjectId:      subjectId,
             Outcome:        outcome,
@@ -617,6 +848,78 @@ public sealed class ConcordexClient : IDisposable
             Raw:            raw);
     }
 
+    internal static CaptureResult ParseCaptureResult(JsonElement raw)
+    {
+        string                frameId        = OptString(raw, "frame_id") ?? string.Empty;
+        bool                  accepted       = OptBool(raw, "accepted") ?? false;
+        int                   nWorkspaces    = OptInt(raw, "n_workspaces") ?? 0;
+        string                interactionId  = OptString(raw, "interaction_id") ?? string.Empty;
+        IReadOnlyList<string> subjectsList   = OptStringArray(raw, "subjects") ?? Array.Empty<string>();
+        string?               followMyData   = OptString(raw, "follow_my_data");
+
+        return new CaptureResult(
+            FrameId:        frameId,
+            Accepted:       accepted,
+            NWorkspaces:    nWorkspaces,
+            InteractionId:  interactionId,
+            Subjects:       subjectsList,
+            FollowMyData:   followMyData,
+            Raw:            raw);
+    }
+
+    internal static OutcomeResult ParseOutcomeResult(JsonElement raw)
+    {
+        string          frameId     = OptString(raw, "frame_id") ?? string.Empty;
+        string          outcome     = OptString(raw, "outcome") ?? string.Empty;
+        JsonElement?    error       = raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("error", out var e) ? e : null;
+        JsonElement?    tagsFired   = raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("tags_fired", out var tf) ? tf : null;
+        JsonElement?    reasoning   = raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("reasoning", out var r) ? r : null;
+        long?           soulVersion = OptLong(raw, "soul_version");
+        string          finishedAt  = OptString(raw, "finished_at") ?? string.Empty;
+
+        return new OutcomeResult(
+            FrameId:     frameId,
+            Outcome:     outcome,
+            Error:       error,
+            TagsFired:   tagsFired,
+            Reasoning:   reasoning,
+            SoulVersion: soulVersion,
+            FinishedAt:  finishedAt,
+            Raw:         raw);
+    }
+
+    internal static NotificationPrefs ParseNotificationPrefs(JsonElement raw)
+    {
+        string  emailCadence    = OptString(raw, "email_cadence") ?? string.Empty;
+        string? emailPausedUntil = OptString(raw, "email_paused_until");
+        bool    pushEnabled     = OptBool(raw, "push_enabled") ?? false;
+        string? phone           = OptString(raw, "phone");
+        bool    smsEnabled      = OptBool(raw, "sms_enabled") ?? false;
+        bool    whatsappEnabled = OptBool(raw, "whatsapp_enabled") ?? false;
+        string? webhookUrl      = OptString(raw, "webhook_url");
+
+        return new NotificationPrefs(
+            EmailCadence:    emailCadence,
+            EmailPausedUntil: emailPausedUntil,
+            PushEnabled:     pushEnabled,
+            Phone:           phone,
+            SmsEnabled:      smsEnabled,
+            WhatsappEnabled: whatsappEnabled,
+            WebhookUrl:      webhookUrl,
+            Raw:             raw);
+    }
+
+    internal static DivisionConfig ParseDivisionConfig(JsonElement raw)
+    {
+        var config = raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("config", out var c)
+            ? c
+            : default;
+
+        return new DivisionConfig(
+            Config: config,
+            Raw:    raw);
+    }
+
     // ---- JsonElement option helpers ---- //
 
     private static string? OptString(JsonElement e, string name)
@@ -636,6 +939,13 @@ public sealed class ConcordexClient : IDisposable
             JsonValueKind.False => false,
             _                    => null,
         };
+    }
+
+    private static int? OptInt(JsonElement e, string name)
+    {
+        if (e.ValueKind != JsonValueKind.Object) return null;
+        if (!e.TryGetProperty(name, out var v))  return null;
+        return v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : null;
     }
 
     private static long? OptLong(JsonElement e, string name)

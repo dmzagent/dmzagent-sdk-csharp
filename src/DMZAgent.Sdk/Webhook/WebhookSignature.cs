@@ -2,13 +2,13 @@ using System;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Concordex.Sdk.Webhook;
+namespace DMZAgent.Sdk.Webhook;
 
 /// <summary>
-/// HMAC-SHA256 verifier for Concordex outbound webhooks (sdk-spec.md §9).
+/// HMAC-SHA256 verifier for DMZAgent outbound webhooks (sdk-spec.md §9).
 ///
 /// <para>
-/// Concordex signs every outbound webhook with the subscription's
+/// DMZAgent signs every outbound webhook with the subscription's
 /// secret. The signature header carries:
 /// </para>
 /// <code>
@@ -27,7 +27,7 @@ public static class WebhookSignature
 {
     /// <summary>Verify a signed payload.</summary>
     /// <param name="payload">Raw request body as a UTF-8 string.</param>
-    /// <param name="signatureHeader">Value of the <c>Concordex-Signature</c> header.</param>
+    /// <param name="signatureHeader">Value of the <c>DMZAgent-Signature</c> header.</param>
     /// <param name="secret">The subscription secret (whsec_…).</param>
     /// <param name="toleranceSeconds">Maximum age of the <c>t</c> timestamp, in seconds. Default 300.</param>
     /// <param name="nowUnix">Override for the current Unix time, in seconds. Use for tests; default is system time.</param>

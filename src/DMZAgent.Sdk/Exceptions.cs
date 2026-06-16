@@ -1,19 +1,19 @@
 using System;
 using System.Collections.Generic;
 
-namespace Concordex.Sdk;
+namespace DMZAgent.Sdk;
 
 /// <summary>
-/// Base class for every error raised by the Concordex SDK. Per
+/// Base class for every error raised by the DMZAgent SDK. Per
 /// sdk-spec.md §3 / §8.5 the C# binding uses the <c>…Exception</c>
-/// convention; the canonical wire name remains <c>ConcordexError</c>.
+/// convention; the canonical wire name remains <c>DMZAgentError</c>.
 ///
 /// Every exception exposes <see cref="StatusCode"/> and <see cref="Body"/>
 /// — the HTTP status the server returned and the parsed response body
 /// (as a <see cref="System.Text.Json.JsonElement"/> when JSON, otherwise
 /// the raw string). Both may be <c>null</c> for network / timeout cases.
 /// </summary>
-public class ConcordexException : Exception
+public class DMZAgentException : Exception
 {
     /// <summary>HTTP status code returned by the server, or <c>null</c>
     /// when no response was received (timeout, DNS failure, etc.).</summary>
@@ -24,7 +24,7 @@ public class ConcordexException : Exception
     /// <c>null</c> for network errors.</summary>
     public object? Body { get; }
 
-    public ConcordexException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
+    public DMZAgentException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
         : base(message, innerException)
     {
         StatusCode = statusCode;
@@ -36,9 +36,9 @@ public class ConcordexException : Exception
 /// HTTP 401 — API key missing, invalid, or revoked.
 /// Maps to canonical <c>AuthError</c>.
 /// </summary>
-public class ConcordexAuthException : ConcordexException
+public class DMZAgentAuthException : DMZAgentException
 {
-    public ConcordexAuthException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
+    public DMZAgentAuthException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
         : base(message, statusCode, body, innerException) { }
 }
 
@@ -46,9 +46,9 @@ public class ConcordexAuthException : ConcordexException
 /// HTTP 403 — API key valid but lacks the scope required for this operation.
 /// Maps to canonical <c>PermissionError</c>.
 /// </summary>
-public class ConcordexPermissionException : ConcordexException
+public class DMZAgentPermissionException : DMZAgentException
 {
-    public ConcordexPermissionException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
+    public DMZAgentPermissionException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
         : base(message, statusCode, body, innerException) { }
 }
 
@@ -58,9 +58,9 @@ public class ConcordexPermissionException : ConcordexException
 /// neither subject_id+interaction_id passed to Check). Maps to canonical
 /// <c>ValidationError</c>.
 /// </summary>
-public class ConcordexValidationException : ConcordexException
+public class DMZAgentValidationException : DMZAgentException
 {
-    public ConcordexValidationException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
+    public DMZAgentValidationException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
         : base(message, statusCode, body, innerException) { }
 }
 
@@ -70,14 +70,14 @@ public class ConcordexValidationException : ConcordexException
 /// <see cref="Exception.InnerException"/> per sdk-spec.md §3.1.
 /// Maps to canonical <c>ServerError</c>.
 /// </summary>
-public class ConcordexServerException : ConcordexException
+public class DMZAgentServerException : DMZAgentException
 {
-    public ConcordexServerException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
+    public DMZAgentServerException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
         : base(message, statusCode, body, innerException) { }
 }
 
 /// <summary>
-/// Raised by <see cref="ConcordexClient.GuardAsync"/> when
+/// Raised by <see cref="DMZAgentClient.GuardAsync"/> when
 /// <c>raiseOnOpen</c> is true and the circuit-breaker check returned
 /// <c>allow == false</c>. NOT raised from the HTTP layer — a 200
 /// response carrying <c>{"state":"open","allow":false}</c> is what
@@ -86,7 +86,7 @@ public class ConcordexServerException : ConcordexException
 /// Maps to canonical <c>CBOpenError</c>. Exposes the policy-decision
 /// fields documented in sdk-spec.md §3.
 /// </summary>
-public class CircuitBreakerOpenException : ConcordexException
+public class CircuitBreakerOpenException : DMZAgentException
 {
     /// <summary>Human-readable rationale from the policy decision.</summary>
     public string Reason { get; }

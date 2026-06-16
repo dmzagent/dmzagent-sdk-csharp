@@ -8,12 +8,12 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Concordex.Sdk.Webhook;
+using DMZAgent.Sdk.Webhook;
 using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace Concordex.Sdk.Tests;
+namespace DMZAgent.Sdk.Tests;
 
 /// <summary>
 /// Contract-conformance runner per spec contract-tests/runner-spec.md.
@@ -38,8 +38,8 @@ public class ContractTests
         File.Exists(SpecPaths.VersionFile).Should().BeTrue(
             $"the spec repo must be checked out at {SpecPaths.SpecRoot}");
         var pinned = File.ReadAllText(SpecPaths.VersionFile).Trim();
-        pinned.Should().Be(ConcordexClient.SpecVersion,
-            "Directory.Build.props ConcordexSpecVersion must match the spec repo's VERSION file");
+        pinned.Should().Be(DMZAgentClient.SpecVersion,
+            "Directory.Build.props DMZAgentSpecVersion must match the spec repo's VERSION file");
     }
 
     // ===================================================================== //
@@ -67,7 +67,7 @@ public class ContractTests
         var       expPath  = fixture.GetProperty("expected_path").GetString()!;
 
         var stub   = new StubHttpMessageHandler(HttpStatusCode.OK, "{}");
-        using var cx = new ConcordexClient(TestApiKey, handler: stub);
+        using var cx = new DMZAgentClient(TestApiKey, handler: stub);
 
         await DispatchAsync(cx, method, args);
 
@@ -81,7 +81,7 @@ public class ContractTests
         stub.LastRequest!.Headers.Authorization!.Scheme.Should().Be("Bearer");
         stub.LastRequest!.Headers.Authorization!.Parameter.Should().Be(TestApiKey);
         stub.LastRequest!.Content!.Headers.ContentType!.MediaType.Should().Be("application/json");
-        stub.LastRequest!.Headers.UserAgent.ToString().Should().Contain("concordex-csharp/");
+        stub.LastRequest!.Headers.UserAgent.ToString().Should().Contain("dmzagent-csharp/");
 
         _output.WriteLine($"✓ golden_envelopes/{name}");
     }
@@ -109,21 +109,21 @@ public class ContractTests
         if (method == "construct")
         {
             var apiKey = args.GetProperty("api_key").GetString() ?? string.Empty;
-            act = () => Task.FromResult(new ConcordexClient(apiKey));
+            act = () => Task.FromResult(new DMZAgentClient(apiKey));
         }
         else
         {
             var stub   = new StubHttpMessageHandler(HttpStatusCode.OK, "{}");
-            var client = new ConcordexClient(TestApiKey, handler: stub);
+            var client = new DMZAgentClient(TestApiKey, handler: stub);
             act = () => DispatchAsync(client, method, args);
         }
 
         // The spec accepts ValidationError or an argument-level exception
         // (canonical type "ValidationError_or_ArgumentError"). Our binding
-        // raises ConcordexValidationException for every validation case
-        // — that's a subtype of ConcordexException, satisfying either
+        // raises DMZAgentValidationException for every validation case
+        // — that's a subtype of DMZAgentException, satisfying either
         // arm of the union.
-        var exc = await act.Should().ThrowAsync<ConcordexException>();
+        var exc = await act.Should().ThrowAsync<DMZAgentException>();
         exc.Which.Message.Should().Contain(msgPart, $"fixture {name}");
 
         _output.WriteLine($"✓ validation_failures/{name}");
@@ -213,7 +213,7 @@ public class ContractTests
         var args       = fixture.GetProperty("args");
 
         var stub = new StubHttpMessageHandler((HttpStatusCode)status, bodyRaw);
-        using var cx = new ConcordexClient(TestApiKey, handler: stub);
+        using var cx = new DMZAgentClient(TestApiKey, handler: stub);
 
         if (method == "guard_with_raise_on_open")
         {
@@ -226,7 +226,7 @@ public class ContractTests
                 var exc = await ((Func<Task>)(async () =>
                 {
                     using var g = await cx.GuardAsync(subjectId: subjectId, raiseOnOpen: raiseOnOpen);
-                })).Should().ThrowAsync<ConcordexException>();
+                })).Should().ThrowAsync<DMZAgentException>();
                 MapCanonical(exc.Which).Should().Be(expected, $"fixture {name}");
 
                 if (fixture.TryGetProperty("expected_fields", out var fields) && exc.Which is CircuitBreakerOpenException cbe)
@@ -257,7 +257,7 @@ public class ContractTests
             var expectedStatusCode = fixture.GetProperty("expected_status_code").GetInt32();
 
             var exc = await ((Func<Task>)(() => DispatchAsync(cx, method, args)))
-                .Should().ThrowAsync<ConcordexException>();
+                .Should().ThrowAsync<DMZAgentException>();
             MapCanonical(exc.Which).Should().Be(expected, $"fixture {name}");
             exc.Which.StatusCode.Should().Be(expectedStatusCode, $"fixture {name}: status_code");
         }
@@ -269,14 +269,14 @@ public class ContractTests
     /// Map a thrown SDK exception back to the canonical name listed in
     /// sdk-spec.md §8.5 (the runner's <c>canonical_type</c> step).
     /// </summary>
-    private static string MapCanonical(ConcordexException exc) => exc switch
+    private static string MapCanonical(DMZAgentException exc) => exc switch
     {
-        ConcordexValidationException  => "ValidationError",
-        ConcordexAuthException        => "AuthError",
-        ConcordexPermissionException  => "PermissionError",
-        ConcordexServerException      => "ServerError",
+        DMZAgentValidationException  => "ValidationError",
+        DMZAgentAuthException        => "AuthError",
+        DMZAgentPermissionException  => "PermissionError",
+        DMZAgentServerException      => "ServerError",
         CircuitBreakerOpenException   => "CBOpenError",
-        _                              => "ConcordexError",
+        _                              => "DMZAgentError",
     };
 
     // ===================================================================== //
@@ -284,7 +284,7 @@ public class ContractTests
     // C# method call.                                                       //
     // ===================================================================== //
 
-    private static async Task DispatchAsync(ConcordexClient cx, string method, JsonElement args)
+    private static async Task DispatchAsync(DMZAgentClient cx, string method, JsonElement args)
     {
         switch (method)
         {
@@ -293,6 +293,7 @@ public class ContractTests
                     subjectId:      args.GetProperty("subject_id").GetString()!,
                     text:           args.GetProperty("text").GetString()!,
                     agentSubjectId: args.GetProperty("agent_subject_id").GetString()!,
+                    subjectType:    OptString(args, "subject_type") ?? "chat",
                     interactionId:  OptString(args, "interaction_id"),
                     subjects:       OptSubjectList(args, "subjects"),
                     payloadExtra:   OptDict(args, "payload_extra"));
@@ -302,6 +303,7 @@ public class ContractTests
                 await cx.ToolCallAsync(
                     subjectId:      args.GetProperty("subject_id").GetString()!,
                     tool:           args.GetProperty("tool").GetString()!,
+                    subjectType:    OptString(args, "subject_type") ?? "chat",
                     args:           OptDict(args, "args"),
                     interactionId:  OptString(args, "interaction_id"),
                     subjects:       OptSubjectList(args, "subjects"));
@@ -311,6 +313,7 @@ public class ContractTests
                 await cx.ToolResultAsync(
                     subjectId:      args.GetProperty("subject_id").GetString()!,
                     tool:           args.GetProperty("tool").GetString()!,
+                    subjectType:    OptString(args, "subject_type") ?? "chat",
                     result:         OptObject(args, "result"),
                     interactionId:  OptString(args, "interaction_id"),
                     subjects:       OptSubjectList(args, "subjects"));
@@ -321,6 +324,7 @@ public class ContractTests
                     agentSubjectId: args.GetProperty("agent_subject_id").GetString()!,
                     subjects:       OptSubjectList(args, "subjects") ?? Array.Empty<IReadOnlyDictionary<string, object?>>(),
                     payload:        OptDict(args, "payload") ?? new Dictionary<string, object?>(),
+                    subjectType:    OptString(args, "subject_type") ?? "chat",
                     interactionId:  OptString(args, "interaction_id"));
                 return;
 
@@ -333,6 +337,7 @@ public class ContractTests
             case "emit_event":
                 await cx.EmitEventAsync(
                     kind:           args.GetProperty("kind").GetString()!,
+                    subjectType:    OptString(args, "subject_type") ?? "chat",
                     agentSubjectId: args.GetProperty("agent_subject_id").GetString()!,
                     payload:        OptDict(args, "payload"));
                 return;

@@ -6,7 +6,7 @@
     repo's VERSION tag and fails loud on drift.
   -->
   <PropertyGroup>
-    <ConcordexSpecVersion>0.5.0</ConcordexSpecVersion>
+    <ConcordexSpecVersion>0.6.0</ConcordexSpecVersion>
     <!--
       The SDK package version. Decoupled from ConcordexSpecVersion as of
       v0.6.0 — additive Concordia MCP client surface (#221 / MCP-1.5b)

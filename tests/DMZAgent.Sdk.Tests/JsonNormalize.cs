@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 
-namespace Concordex.Sdk.Tests;
+namespace DMZAgent.Sdk.Tests;
 
 /// <summary>
 /// JSON normalization per contract-tests runner-spec.md: sort keys at
