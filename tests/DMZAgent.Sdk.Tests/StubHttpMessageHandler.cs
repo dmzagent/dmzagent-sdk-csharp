@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -20,8 +21,9 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
 
     private readonly Func<HttpRequestMessage, string, HttpResponseMessage> _responder;
 
-    public StubHttpMessageHandler(HttpStatusCode status, string responseBody, string contentType = "application/json")
-        : this((_, _) => MakeResponse(status, responseBody, contentType))
+    public StubHttpMessageHandler(HttpStatusCode status, string responseBody, string contentType = "application/json",
+        IReadOnlyDictionary<string, string>? headers = null)
+        : this((_, _) => MakeResponse(status, responseBody, contentType, headers))
     { }
 
     public StubHttpMessageHandler(Func<HttpRequestMessage, string, HttpResponseMessage> responder)
@@ -40,11 +42,22 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         return _responder(request, LastRequestBody ?? string.Empty);
     }
 
-    public static HttpResponseMessage MakeResponse(HttpStatusCode status, string body, string contentType = "application/json")
+    public static HttpResponseMessage MakeResponse(HttpStatusCode status, string body, string contentType = "application/json",
+        IReadOnlyDictionary<string, string>? headers = null)
     {
-        return new HttpResponseMessage(status)
+        var response = new HttpResponseMessage(status)
         {
             Content = new StringContent(body, Encoding.UTF8, contentType),
         };
+        if (headers is not null)
+        {
+            foreach (var (name, value) in headers)
+            {
+                // Without validation: error-mapping fixtures deliberately
+                // carry malformed header values (e.g. garbage Retry-After).
+                response.Headers.TryAddWithoutValidation(name, value);
+            }
+        }
+        return response;
     }
 }

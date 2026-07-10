@@ -1,20 +1,25 @@
 <Project>
 
   <!--
-    Single source of truth for the Concordex spec version this SDK targets.
+    Single source of truth for the DMZAgent spec version this SDK targets.
     Per sdk-spec.md §11.1, the CI workflow checks this against the spec
     repo's VERSION tag and fails loud on drift.
+
+    NOTE: this property was previously named ConcordexSpecVersion (the
+    retired brand), which left the csproj's $(DMZAgentSpecVersion)
+    reference unresolved and blanked the spec version out of the NuGet
+    Description. Renamed for 0.7.0.
   -->
   <PropertyGroup>
-    <ConcordexSpecVersion>0.6.0</ConcordexSpecVersion>
+    <DMZAgentSpecVersion>0.7.0</DMZAgentSpecVersion>
     <!--
-      The SDK package version. Decoupled from ConcordexSpecVersion as of
+      The SDK package version. Decoupled from DMZAgentSpecVersion as of
       v0.6.0 — additive Concordia MCP client surface (#221 / MCP-1.5b)
-      ships in the same package alongside the agent-stream surface that
-      still targets spec 0.5.0. publish.yml must compare the release tag
-      against SdkVersion (not ConcordexSpecVersion).
+      ships in the same package alongside the agent-stream surface.
+      publish.yml must compare the release tag against SdkVersion (not
+      DMZAgentSpecVersion).
     -->
-    <SdkVersion>0.6.0</SdkVersion>
+    <SdkVersion>0.7.0</SdkVersion>
     <Version>$(SdkVersion)</Version>
     <PackageVersion>$(SdkVersion)</PackageVersion>
 

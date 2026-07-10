@@ -212,7 +212,19 @@ public class ContractTests
         var method     = fixture.GetProperty("method").GetString()!;
         var args       = fixture.GetProperty("args");
 
-        var stub = new StubHttpMessageHandler((HttpStatusCode)status, bodyRaw);
+        // Optional response headers (e.g. Retry-After for the 429
+        // fixtures added in spec 0.7.0).
+        Dictionary<string, string>? headers = null;
+        if (fixture.TryGetProperty("headers", out var headersEl) && headersEl.ValueKind == JsonValueKind.Object)
+        {
+            headers = new Dictionary<string, string>();
+            foreach (var h in headersEl.EnumerateObject())
+            {
+                headers[h.Name] = h.Value.GetString()!;
+            }
+        }
+
+        var stub = new StubHttpMessageHandler((HttpStatusCode)status, bodyRaw, headers: headers);
         using var cx = new DMZAgentClient(TestApiKey, handler: stub);
 
         if (method == "guard_with_raise_on_open")
@@ -260,6 +272,18 @@ public class ContractTests
                 .Should().ThrowAsync<DMZAgentException>();
             MapCanonical(exc.Which).Should().Be(expected, $"fixture {name}");
             exc.Which.StatusCode.Should().Be(expectedStatusCode, $"fixture {name}: status_code");
+
+            // Spec 0.7.0: RateLimitError fixtures pin retry_after
+            // (JSON null → the property must be null).
+            if (fixture.TryGetProperty("expected_retry_after", out var retryEl))
+            {
+                var rle = exc.Which.Should().BeOfType<DMZAgentRateLimitException>(
+                    $"fixture {name}: expected_retry_after implies RateLimitError").Which;
+                int? expectedRetryAfter = retryEl.ValueKind == JsonValueKind.Number
+                    ? retryEl.GetInt32()
+                    : null;
+                rle.RetryAfter.Should().Be(expectedRetryAfter, $"fixture {name}: retry_after");
+            }
         }
 
         _output.WriteLine($"✓ error_mapping/{name}");
@@ -274,6 +298,7 @@ public class ContractTests
         DMZAgentValidationException  => "ValidationError",
         DMZAgentAuthException        => "AuthError",
         DMZAgentPermissionException  => "PermissionError",
+        DMZAgentRateLimitException   => "RateLimitError",
         DMZAgentServerException      => "ServerError",
         CircuitBreakerOpenException   => "CBOpenError",
         _                              => "DMZAgentError",

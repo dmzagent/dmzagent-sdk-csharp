@@ -53,7 +53,8 @@ public class DMZAgentPermissionException : DMZAgentException
 }
 
 /// <summary>
-/// HTTP 400 — server rejected the payload as malformed. Also thrown for
+/// HTTP 400 — server rejected the payload as malformed — or HTTP 422 —
+/// well-formed but unprocessable (bad event / rulebook). Also thrown for
 /// client-side argument validation (e.g. unknown event kind, both /
 /// neither subject_id+interaction_id passed to Check). Maps to canonical
 /// <c>ValidationError</c>.
@@ -62,6 +63,29 @@ public class DMZAgentValidationException : DMZAgentException
 {
     public DMZAgentValidationException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
         : base(message, statusCode, body, innerException) { }
+}
+
+/// <summary>
+/// HTTP 429 — rate cap reached. Maps to canonical <c>RateLimitError</c>.
+///
+/// Exposes <see cref="RetryAfter"/> — seconds until retrying can
+/// succeed, parsed from the response's <c>Retry-After</c> header
+/// (delta-seconds form); <c>null</c> when the header is absent or
+/// unparseable. Per sdk-spec.md §3 the SDK never sleeps or retries
+/// automatically — the value is surfaced for the caller to decide.
+/// </summary>
+public class DMZAgentRateLimitException : DMZAgentException
+{
+    /// <summary>Seconds until retrying can succeed, from the
+    /// <c>Retry-After</c> header (delta-seconds); <c>null</c> when the
+    /// header is absent or unparseable.</summary>
+    public int? RetryAfter { get; }
+
+    public DMZAgentRateLimitException(string message, int? statusCode = null, object? body = null, int? retryAfter = null, Exception? innerException = null)
+        : base(message, statusCode, body, innerException)
+    {
+        RetryAfter = retryAfter;
+    }
 }
 
 /// <summary>

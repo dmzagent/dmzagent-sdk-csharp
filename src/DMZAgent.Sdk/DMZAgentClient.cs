@@ -48,7 +48,7 @@ public sealed class DMZAgentClient : IDisposable
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>Spec version this build targets. Bumped via Directory.Build.props.</summary>
-    public const string SpecVersion = "0.6.0";
+    public const string SpecVersion = "0.7.0";
 
     /// <summary>The User-Agent set on every request per sdk-spec.md §1.4.</summary>
     public static readonly string DefaultUserAgent = $"dmzagent-csharp/{SpecVersion}";
@@ -751,11 +751,43 @@ public sealed class DMZAgentClient : IDisposable
                 "invalid or revoked API key", status, bodyForException),
             403 => new DMZAgentPermissionException(
                 "API key lacks required scope for this operation", status, bodyForException),
+            422 => new DMZAgentValidationException(
+                $"server could not process request to {path}: {detail}", status, bodyForException),
+            429 => new DMZAgentRateLimitException(
+                $"rate limited on {path}: {detail}", status, bodyForException,
+                retryAfter: ParseRetryAfter(response)),
             >= 500 => new DMZAgentServerException(
                 $"server error from {path} ({status}): {detail}", status, bodyForException),
             _ => new DMZAgentException(
                 $"unexpected status {status} from {path}", status, bodyForException),
         };
+    }
+
+    /// <summary>
+    /// Parse the <c>Retry-After</c> response header per sdk-spec.md §3:
+    /// delta-seconds form only (a non-negative integer). Returns
+    /// <c>null</c> when the header is absent or unparseable (including
+    /// the HTTP-date form, negative values, and overflow). The SDK never
+    /// sleeps or retries on the caller's behalf.
+    /// </summary>
+    private static int? ParseRetryAfter(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("Retry-After", out var values))
+        {
+            return null;
+        }
+
+        var raw = values.FirstOrDefault()?.Trim();
+        if (string.IsNullOrEmpty(raw))
+        {
+            return null;
+        }
+
+        // Strict delta-seconds (1*DIGIT): no sign, no decimals, no dates.
+        return int.TryParse(raw, System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+            ? seconds
+            : null;
     }
 
     private static string ExtractDetail(JsonElement? jsonBody, string raw)

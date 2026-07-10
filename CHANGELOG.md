@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.7.0] — 2026-07-10
+
+### Added
+- Error-taxonomy alignment with spec 0.7.0 (sdk-spec.md §3, DX-9):
+  - HTTP 422 now maps to `DMZAgentValidationException` (canonical
+    `ValidationError`) — well-formed but unprocessable payloads.
+  - HTTP 429 now maps to the new `DMZAgentRateLimitException`
+    (canonical `RateLimitError`), exposing `RetryAfter` (`int?`) —
+    seconds parsed from the response's `Retry-After` header
+    (delta-seconds form); `null` when the header is absent or
+    unparseable. The SDK never sleeps or retries automatically.
+  Both statuses previously fell through to the base
+  `DMZAgentException` ("unexpected status") arm.
+- Contract-test runner support for the new error-mapping fixture keys:
+  `headers` (applied to the stubbed HTTP response) and
+  `expected_retry_after` (asserted against `RetryAfter`; JSON `null`
+  asserts the property is `null`).
+- `RateLimitRetryAfterTests` — unit coverage for `Retry-After`
+  parsing: present, absent, and garbage (non-numeric, HTTP-date,
+  negative, decimal, overflow) → `null`.
+
+### Changed
+- Package version bumped to `0.7.0` (minor — additive, no breaking
+  changes to the existing 0.6.0 surface).
+- Pinned spec version bumped to `0.7.0`
+  (`DMZAgentClient.SpecVersion`, `Directory.Build.props`).
+
+### Fixed
+- `Directory.Build.props` defined the spec-version property under the
+  retired brand name (`ConcordexSpecVersion`) while
+  `DMZAgent.Sdk.csproj`'s NuGet `Description` interpolated
+  `$(DMZAgentSpecVersion)` — an undefined property that rendered as an
+  empty string in the published package description (and broke the
+  `grep` in `spec-conformance.yml` / `publish.yml`, which already
+  expect `DMZAgentSpecVersion`). The property is now named
+  `DMZAgentSpecVersion`.
+
 ## [0.6.0] — 2026-06-02
 
 ### Added
