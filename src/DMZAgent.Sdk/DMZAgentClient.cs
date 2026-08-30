@@ -48,7 +48,9 @@ public sealed class DMZAgentClient : IDisposable
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>Spec version this build targets. Bumped via Directory.Build.props.</summary>
-    public const string SpecVersion = "0.6.0";
+    // Generated from <DMZAgentSpecVersion> in Directory.Build.props by the
+    // GenerateSpecVersion target, so the pin and this constant cannot drift.
+    public const string SpecVersion = GeneratedSpecVersion.Value;
 
     /// <summary>The User-Agent set on every request per sdk-spec.md §1.4.</summary>
     public static readonly string DefaultUserAgent = $"dmzagent-csharp/{SpecVersion}";
@@ -185,6 +187,11 @@ public sealed class DMZAgentClient : IDisposable
         string?                                      speakerRole      = null,
         string?                                      occurredAt       = null,
         IReadOnlyDictionary<string, object?>?        metadata         = null,
+        // Caller-generated key making a retry safe (spec §1.8). Supply your
+        // own: the SDK never invents one, because a key minted per call
+        // deduplicates nothing and one derived from the payload would
+        // collapse two genuinely distinct but identical events.
+        string?                                      idempotencyKey   = null,
         CancellationToken                            cancellationToken = default)
     {
         if (!EventKinds.All.Contains(kind))
@@ -217,7 +224,7 @@ public sealed class DMZAgentClient : IDisposable
         if (!string.IsNullOrEmpty(occurredAt))       body["occurred_at"]      = occurredAt;
         if (metadata is { Count: > 0 })              body["metadata"]         = metadata;
 
-        return PostEmitAsync("/v1/agent-stream/event", body, cancellationToken);
+        return PostEmitAsync("/v1/agent-stream/event", body, idempotencyKey, cancellationToken);
     }
 
     /// <summary>
@@ -449,6 +456,11 @@ public sealed class DMZAgentClient : IDisposable
         string?                                             speakerRole      = null,
         string?                                             occurredAt       = null,
         IReadOnlyDictionary<string, object?>?               metadata         = null,
+        // Caller-generated key making a retry safe (spec §1.8). Supply your
+        // own: the SDK never invents one, because a key minted per call
+        // deduplicates nothing and one derived from the payload would
+        // collapse two genuinely distinct but identical events.
+        string?                                             idempotencyKey   = null,
         CancellationToken                                   cancellationToken = default)
     {
         if (!EventKinds.All.Contains(kind))
@@ -482,7 +494,7 @@ public sealed class DMZAgentClient : IDisposable
         if (!string.IsNullOrEmpty(occurredAt))       body["occurred_at"] = occurredAt;
         if (metadata is { Count: > 0 })              body["metadata"] = metadata;
 
-        var raw = await PostJsonAsync("/v1/agent-stream/event", body, cancellationToken).ConfigureAwait(false);
+        var raw = await PostJsonAsync("/v1/agent-stream/event", body, idempotencyKey, cancellationToken).ConfigureAwait(false);
         return ParseCaptureResult(raw);
     }
 
@@ -601,9 +613,10 @@ public sealed class DMZAgentClient : IDisposable
     internal async Task<EmitResult> PostEmitAsync(
         string                          path,
         IReadOnlyDictionary<string, object?> body,
+        string?                         idempotencyKey,
         CancellationToken               cancellationToken)
     {
-        var raw = await PostJsonAsync(path, body, cancellationToken).ConfigureAwait(false);
+        var raw = await PostJsonAsync(path, body, idempotencyKey, cancellationToken).ConfigureAwait(false);
         return ParseEmitResult(raw);
     }
 
@@ -635,9 +648,23 @@ public sealed class DMZAgentClient : IDisposable
         }
     }
 
+    internal Task<JsonElement> PostJsonAsync(
+        string                          path,
+        IReadOnlyDictionary<string, object?> body,
+        CancellationToken               cancellationToken)
+        => PostJsonAsync(path, body, null, cancellationToken);
+
+    /// <param name="idempotencyKey">
+    /// Caller-generated key making a retry of this request safe (spec §1.8),
+    /// or <c>null</c> for none. The SDK never generates one: a key minted per
+    /// call is unique per call and deduplicates nothing, and a key derived
+    /// from the payload would collapse two genuinely distinct but identical
+    /// events.
+    /// </param>
     internal async Task<JsonElement> PostJsonAsync(
         string                          path,
         IReadOnlyDictionary<string, object?> body,
+        string?                         idempotencyKey,
         CancellationToken               cancellationToken)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(DMZAgentClient));
@@ -650,6 +677,10 @@ public sealed class DMZAgentClient : IDisposable
             Content = new ByteArrayContent(payload),
         };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        if (!string.IsNullOrEmpty(idempotencyKey))
+        {
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
+        }
         ApplyRequestAuth(request);
 
         HttpResponseMessage response;
@@ -745,8 +776,23 @@ public sealed class DMZAgentClient : IDisposable
 
         throw status switch
         {
-            400 => new DMZAgentValidationException(
+            // 400 and 422 both mean "fix the request" — malformed vs
+            // parsed-but-rejected. The spec taxonomy maps both here;
+            // StatusCode tells them apart for callers that care.
+            400 or 422 => new DMZAgentValidationException(
                 $"server rejected request to {path}: {detail}", status, bodyForException),
+            // 409 is the Idempotency-Key in-flight conflict (§1.8). Kept
+            // above the >= 500 arm and off it entirely: the duplicate is the
+            // caller's own earlier request, so retrying the same key replays
+            // its stored response instead of causing a second side effect.
+            409 => new DMZAgentConflictException(
+                $"a request with this Idempotency-Key is already in flight on {path}",
+                status, bodyForException),
+            429 => new DMZAgentRateLimitException(
+                $"rate limited on {path}", status, bodyForException,
+                // .Delta is populated only for the delta-seconds form; an
+                // HTTP-date leaves it null, which is the behaviour we want.
+                response.Headers.RetryAfter?.Delta is { } d ? (int)d.TotalSeconds : null),
             401 => new DMZAgentAuthException(
                 "invalid or revoked API key", status, bodyForException),
             403 => new DMZAgentPermissionException(
@@ -794,6 +840,7 @@ public sealed class DMZAgentClient : IDisposable
             Subjects:       subjectsList ?? Array.Empty<string>(),
             Queued:         queued,
             Accepted:       accepted,
+            NWorkspaces:    OptInt(raw, "n_workspaces"),
             FrameId:        frameId,
             SubjectId:      subjectId,
             Outcome:        outcome,
@@ -803,6 +850,7 @@ public sealed class DMZAgentClient : IDisposable
             SoulVersion:    soulVersion,
             LedgerIndex:    ledgerIndex,
             FollowMyData:   followMyData,
+            Livemode:       OptBool(raw, "livemode"),
             Raw:            raw);
     }
 
@@ -864,6 +912,7 @@ public sealed class DMZAgentClient : IDisposable
             InteractionId:  interactionId,
             Subjects:       subjectsList,
             FollowMyData:   followMyData,
+            Livemode:       OptBool(raw, "livemode"),
             Raw:            raw);
     }
 

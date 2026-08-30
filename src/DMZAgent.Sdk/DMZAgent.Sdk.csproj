@@ -18,7 +18,7 @@
     <PackageTags>dmzagent;agents;observability;circuit-breaker;sdk</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <RepositoryUrl>https://github.com/praeceptor-thesis/dmzagent-sdk-csharp</RepositoryUrl>
+    <RepositoryUrl>https://github.com/dmzagent/dmzagent-sdk-csharp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://spec.dmzagent.com</PackageProjectUrl>
 
@@ -40,5 +40,32 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
   </ItemGroup>
+
+
+  <!--
+    Generate the SpecVersion constant from the single MSBuild property.
+
+    It used to be a hardcoded `const string SpecVersion` in DMZAgentClient.cs
+    alongside <DMZAgentSpecVersion> here, and bumping the pin updated the
+    property while the constant kept its old value — so the SDK advertised
+    dmzagent-csharp/0.6.0 in its User-Agent while claiming to implement a
+    newer spec. Generating it means the two cannot disagree.
+
+    Literal semicolons are %3B; MSBuild treats a bare ; as an item separator.
+  -->
+  <Target Name="GenerateSpecVersion" BeforeTargets="BeforeCompile">
+    <PropertyGroup>
+      <_SpecVersionFile>$(IntermediateOutputPath)SpecVersion.g.cs</_SpecVersionFile>
+    </PropertyGroup>
+    <WriteLinesToFile
+      File="$(_SpecVersionFile)"
+      Overwrite="true"
+      WriteOnlyWhenDifferent="true"
+      Lines="// &lt;auto-generated /&gt; Generated from &lt;DMZAgentSpecVersion&gt; in Directory.Build.props.;namespace DMZAgent.Sdk%3B;internal static class GeneratedSpecVersion { public const string Value = &quot;$(DMZAgentSpecVersion)&quot;%3B }" />
+    <ItemGroup>
+      <Compile Include="$(_SpecVersionFile)" />
+      <FileWrites Include="$(_SpecVersionFile)" />
+    </ItemGroup>
+  </Target>
 
 </Project>
