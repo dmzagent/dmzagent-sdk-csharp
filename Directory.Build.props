@@ -1,18 +1,31 @@
 <Project>
 
   <!--
-    Single source of truth for the Concordex spec version this SDK targets.
+    Single source of truth for the spec version this SDK targets.
     Per sdk-spec.md §11.1, the CI workflow checks this against the spec
     repo's VERSION tag and fails loud on drift.
+
+    RENAMED from the pre-rebrand property name — this declaration was the
+    one place the rename missed, while every consumer had already moved to
+    the new name. The mismatch was silent in the worst way: the grep in
+    spec-conformance.yml and publish.yml matched nothing and yielded an
+    EMPTY version rather than failing, so the conformance job died before
+    building and the publish gate compared against "". It went unnoticed
+    because the conformance workflow could not check the spec out either,
+    and never got far enough to complain.
+
+    Do NOT write the property's own name inside this comment: those greps
+    take the first capture on every matching line, so a second occurrence
+    anywhere in this file makes VERSION multi-line and breaks them again.
   -->
   <PropertyGroup>
-    <ConcordexSpecVersion>0.6.0</ConcordexSpecVersion>
+    <DMZAgentSpecVersion>0.6.0</DMZAgentSpecVersion>
     <!--
-      The SDK package version. Decoupled from ConcordexSpecVersion as of
+      The SDK package version. Decoupled from DMZAgentSpecVersion as of
       v0.6.0 — additive Concordia MCP client surface (#221 / MCP-1.5b)
       ships in the same package alongside the agent-stream surface that
       still targets spec 0.5.0. publish.yml must compare the release tag
-      against SdkVersion (not ConcordexSpecVersion).
+      against SdkVersion (not DMZAgentSpecVersion).
     -->
     <SdkVersion>0.6.0</SdkVersion>
     <Version>$(SdkVersion)</Version>
