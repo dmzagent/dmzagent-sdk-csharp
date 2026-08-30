@@ -53,15 +53,45 @@ public class DMZAgentPermissionException : DMZAgentException
 }
 
 /// <summary>
-/// HTTP 400 — server rejected the payload as malformed. Also thrown for
-/// client-side argument validation (e.g. unknown event kind, both /
-/// neither subject_id+interaction_id passed to Check). Maps to canonical
-/// <c>ValidationError</c>.
+/// HTTP 400 or 422 — server rejected the payload. 400 means malformed;
+/// 422 means it parsed but failed evaluation. The spec's error taxonomy
+/// maps both here, because the caller's remedy is the same: fix the
+/// request, do not retry it unchanged. <see cref="DMZAgentException.StatusCode"/>
+/// distinguishes them when that matters.
+///
+/// Also thrown for client-side argument validation (e.g. unknown event
+/// kind, both / neither subject_id+interaction_id passed to Check).
+/// Maps to canonical <c>ValidationError</c>.
 /// </summary>
 public class DMZAgentValidationException : DMZAgentException
 {
     public DMZAgentValidationException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
         : base(message, statusCode, body, innerException) { }
+}
+
+/// <summary>
+/// HTTP 429 — the caller is being rate limited. Maps to canonical
+/// <c>RateLimitError</c>.
+///
+/// <see cref="RetryAfter"/> is seconds taken from the <c>Retry-After</c>
+/// response header, or <c>null</c> when the server did not send one.
+/// Callers should handle <c>null</c> rather than assume a default: the
+/// contract corpus carries a vector for each case precisely because both
+/// occur. Only the delta-seconds form is honoured — RFC 9110 also permits
+/// an HTTP-date, and a caller handed a wrong number is worse off than one
+/// handed <c>null</c>.
+/// </summary>
+public class DMZAgentRateLimitException : DMZAgentException
+{
+    /// <summary>Seconds to wait before retrying, or <c>null</c> when the
+    /// server sent no usable <c>Retry-After</c> header.</summary>
+    public int? RetryAfter { get; }
+
+    public DMZAgentRateLimitException(string message, int? statusCode = null, object? body = null, int? retryAfter = null, Exception? innerException = null)
+        : base(message, statusCode, body, innerException)
+    {
+        RetryAfter = retryAfter;
+    }
 }
 
 /// <summary>

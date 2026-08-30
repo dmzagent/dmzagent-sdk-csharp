@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -24,6 +25,19 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         : this((_, _) => MakeResponse(status, responseBody, contentType))
     { }
 
+    /// <summary>
+    /// Some corpus fixtures attach response headers (429 carries
+    /// <c>Retry-After</c>). Without forwarding them the SDK never sees what
+    /// it is meant to parse, and the vector passes for the wrong reason.
+    /// </summary>
+    public StubHttpMessageHandler(
+        HttpStatusCode status,
+        string responseBody,
+        IReadOnlyDictionary<string, string> responseHeaders,
+        string contentType = "application/json")
+        : this((_, _) => MakeResponse(status, responseBody, contentType, responseHeaders))
+    { }
+
     public StubHttpMessageHandler(Func<HttpRequestMessage, string, HttpResponseMessage> responder)
     {
         _responder = responder;
@@ -40,11 +54,28 @@ internal sealed class StubHttpMessageHandler : HttpMessageHandler
         return _responder(request, LastRequestBody ?? string.Empty);
     }
 
-    public static HttpResponseMessage MakeResponse(HttpStatusCode status, string body, string contentType = "application/json")
+    public static HttpResponseMessage MakeResponse(
+        HttpStatusCode status,
+        string body,
+        string contentType = "application/json",
+        IReadOnlyDictionary<string, string>? responseHeaders = null)
     {
-        return new HttpResponseMessage(status)
+        var response = new HttpResponseMessage(status)
         {
             Content = new StringContent(body, Encoding.UTF8, contentType),
         };
+        if (responseHeaders is not null)
+        {
+            foreach (var (key, value) in responseHeaders)
+            {
+                // Response headers first; fall back to content headers for the
+                // entity-level ones HttpClient refuses on the response object.
+                if (!response.Headers.TryAddWithoutValidation(key, value))
+                {
+                    response.Content.Headers.TryAddWithoutValidation(key, value);
+                }
+            }
+        }
+        return response;
     }
 }

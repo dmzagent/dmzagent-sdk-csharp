@@ -745,8 +745,16 @@ public sealed class DMZAgentClient : IDisposable
 
         throw status switch
         {
-            400 => new DMZAgentValidationException(
+            // 400 and 422 both mean "fix the request" — malformed vs
+            // parsed-but-rejected. The spec taxonomy maps both here;
+            // StatusCode tells them apart for callers that care.
+            400 or 422 => new DMZAgentValidationException(
                 $"server rejected request to {path}: {detail}", status, bodyForException),
+            429 => new DMZAgentRateLimitException(
+                $"rate limited on {path}", status, bodyForException,
+                // .Delta is populated only for the delta-seconds form; an
+                // HTTP-date leaves it null, which is the behaviour we want.
+                response.Headers.RetryAfter?.Delta is { } d ? (int)d.TotalSeconds : null),
             401 => new DMZAgentAuthException(
                 "invalid or revoked API key", status, bodyForException),
             403 => new DMZAgentPermissionException(

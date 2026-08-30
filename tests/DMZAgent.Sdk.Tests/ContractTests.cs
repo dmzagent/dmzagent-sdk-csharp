@@ -212,7 +212,16 @@ public class ContractTests
         var method     = fixture.GetProperty("method").GetString()!;
         var args       = fixture.GetProperty("args");
 
-        var stub = new StubHttpMessageHandler((HttpStatusCode)status, bodyRaw);
+        var fxHeaders = new Dictionary<string, string>();
+        if (fixture.TryGetProperty("headers", out var hEl) && hEl.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var h in hEl.EnumerateObject())
+            {
+                fxHeaders[h.Name] = h.Value.ToString();
+            }
+        }
+
+        var stub = new StubHttpMessageHandler((HttpStatusCode)status, bodyRaw, fxHeaders);
         using var cx = new DMZAgentClient(TestApiKey, handler: stub);
 
         if (method == "guard_with_raise_on_open")
@@ -260,6 +269,17 @@ public class ContractTests
                 .Should().ThrowAsync<DMZAgentException>();
             MapCanonical(exc.Which).Should().Be(expected, $"fixture {name}");
             exc.Which.StatusCode.Should().Be(expectedStatusCode, $"fixture {name}: status_code");
+
+            // Presence check, not a null test: the corpus carries an explicit
+            // null case for a 429 sent without a Retry-After header, and a
+            // null test would make that indistinguishable from absence.
+            if (fixture.TryGetProperty("expected_retry_after", out var raEl))
+            {
+                var rle = exc.Which.Should().BeOfType<DMZAgentRateLimitException>(
+                    $"fixture {name}: expected_retry_after implies RateLimitError").Which;
+                int? wantRetryAfter = raEl.ValueKind == JsonValueKind.Null ? null : raEl.GetInt32();
+                rle.RetryAfter.Should().Be(wantRetryAfter, $"fixture {name}: retry_after");
+            }
         }
 
         _output.WriteLine($"✓ error_mapping/{name}");
@@ -272,6 +292,7 @@ public class ContractTests
     private static string MapCanonical(DMZAgentException exc) => exc switch
     {
         DMZAgentValidationException  => "ValidationError",
+        DMZAgentRateLimitException   => "RateLimitError",
         DMZAgentAuthException        => "AuthError",
         DMZAgentPermissionException  => "PermissionError",
         DMZAgentServerException      => "ServerError",
