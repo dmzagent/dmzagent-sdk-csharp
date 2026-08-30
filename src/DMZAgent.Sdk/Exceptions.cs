@@ -95,6 +95,23 @@ public class DMZAgentRateLimitException : DMZAgentException
 }
 
 /// <summary>
+/// HTTP 409 — a request carrying this <c>Idempotency-Key</c> is already in
+/// flight. Maps to canonical <c>ConflictError</c> (sdk-spec.md §3).
+///
+/// <para>Deliberately not a <see cref="DMZAgentServerException"/>: this is
+/// not a transient fault. The duplicate is the caller's <em>own</em> earlier
+/// request, still running. Retrying the same key after a short pause replays
+/// that request's stored response rather than producing a second side
+/// effect, so the caller can safely wait and retry — but the SDK never does
+/// so on its own (§1.8).</para>
+/// </summary>
+public class DMZAgentConflictException : DMZAgentException
+{
+    public DMZAgentConflictException(string message, int? statusCode = null, object? body = null, Exception? innerException = null)
+        : base(message, statusCode, body, innerException) { }
+}
+
+/// <summary>
 /// HTTP 5xx, timeout, or any underlying transport failure. Safe to
 /// retry with backoff. Original cause is preserved via
 /// <see cref="Exception.InnerException"/> per sdk-spec.md §3.1.

@@ -293,6 +293,7 @@ public class ContractTests
     {
         DMZAgentValidationException  => "ValidationError",
         DMZAgentRateLimitException   => "RateLimitError",
+        DMZAgentConflictException    => "ConflictError",
         DMZAgentAuthException        => "AuthError",
         DMZAgentPermissionException  => "PermissionError",
         DMZAgentServerException      => "ServerError",

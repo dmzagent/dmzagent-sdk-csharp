@@ -18,6 +18,9 @@ public sealed record EmitResult(
     [property: JsonPropertyName("subjects")]         IReadOnlyList<string>       Subjects,
     [property: JsonPropertyName("queued")]           bool                        Queued,
     [property: JsonPropertyName("accepted")]         bool?                       Accepted,
+    // Workspaces the frame fanned out to (spec §7.1). Was reachable only
+    // through Raw before 0.8.0.
+    [property: JsonPropertyName("n_workspaces")]     int?                        NWorkspaces,
     [property: JsonPropertyName("frame_id")]         string?                     FrameId,
     [property: JsonPropertyName("subject_id")]       string?                     SubjectId,
     [property: JsonPropertyName("outcome")]          string?                     Outcome,
@@ -27,6 +30,12 @@ public sealed record EmitResult(
     [property: JsonPropertyName("soul_version")]     long?                       SoulVersion,
     [property: JsonPropertyName("ledger_index")]     long?                       LedgerIndex,
     [property: JsonPropertyName("follow_my_data")]   string?                     FollowMyData,
+    // true for a live key, false for a test key (ck_test_…), null when the
+    // server omitted it (spec §1.2, §2.1). Null rather than false: false is
+    // the positive claim "this is test data", and asserting that about a
+    // response that never carried the field is the confusion the signal
+    // exists to prevent.
+    [property: JsonPropertyName("livemode")]         bool?                       Livemode,
     [property: JsonIgnore]                           JsonElement                 Raw
 );
 
@@ -59,6 +68,8 @@ public sealed record CaptureResult(
     [property: JsonPropertyName("interaction_id")]   string                      InteractionId,
     [property: JsonPropertyName("subjects")]         IReadOnlyList<string>       Subjects,
     [property: JsonPropertyName("follow_my_data")]   string?                     FollowMyData,
+    // See EmitResult.Livemode (spec §1.2, §2.1).
+    [property: JsonPropertyName("livemode")]         bool?                       Livemode,
     [property: JsonIgnore]                           JsonElement                 Raw
 );
 
