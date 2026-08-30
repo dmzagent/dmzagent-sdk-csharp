@@ -506,6 +506,18 @@ public sealed class DMZAgentClient : IDisposable
     /// Poll the frame story endpoint until reasoning completes
     /// (sdk-spec.md §5.10).
     /// </summary>
+    /// <remarks>
+    /// Terminates on <c>summary.complete</c> — every workspace the frame
+    /// fanned out to has reported, matching <c>n_workspaces</c> on the
+    /// ingest ack. This previously returned the first response that parsed,
+    /// which is a half-finished story: the endpoint answers 200 all the way
+    /// through the fan-out, handing back traces as each workspace finishes.
+    /// <para>
+    /// No <c>workspace_id</c> is sent. The story endpoint is
+    /// division-scoped; naming a workspace narrows the result to 1 of N
+    /// perspectives and makes completeness mean "that workspace finished".
+    /// </para>
+    /// </remarks>
     public async Task<OutcomeResult> AwaitOutcomeAsync(
         string            frameId,
         double            timeoutSeconds = 30.0,
@@ -525,7 +537,8 @@ public sealed class DMZAgentClient : IDisposable
             try
             {
                 var raw = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false);
-                return ParseOutcomeResult(raw);
+                var result = ParseOutcomeResult(raw);
+                if (result.Complete) return result;
             }
             catch (DMZAgentValidationException) { throw; }
             catch (DMZAgentAuthException) { throw; }
@@ -918,23 +931,36 @@ public sealed class DMZAgentClient : IDisposable
 
     internal static OutcomeResult ParseOutcomeResult(JsonElement raw)
     {
+        bool            isObject    = raw.ValueKind == JsonValueKind.Object;
         string          frameId     = OptString(raw, "frame_id") ?? string.Empty;
-        string          outcome     = OptString(raw, "outcome") ?? string.Empty;
-        JsonElement?    error       = raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("error", out var e) ? e : null;
-        JsonElement?    tagsFired   = raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("tags_fired", out var tf) ? tf : null;
-        JsonElement?    reasoning   = raw.ValueKind == JsonValueKind.Object && raw.TryGetProperty("reasoning", out var r) ? r : null;
+        string?         outcome     = OptString(raw, "outcome");
+        string?         divisionId  = OptString(raw, "division_id");
+        JsonElement?    workspaceIds = isObject && raw.TryGetProperty("workspace_ids", out var wi) ? wi : null;
+        JsonElement?    error       = isObject && raw.TryGetProperty("error", out var e) ? e : null;
+        JsonElement?    tagsFired   = isObject && raw.TryGetProperty("tags_fired", out var tf) ? tf : null;
+        JsonElement?    reasoning   = isObject && raw.TryGetProperty("reasoning", out var r) ? r : null;
         long?           soulVersion = OptLong(raw, "soul_version");
         string          finishedAt  = OptString(raw, "finished_at") ?? string.Empty;
 
+        // summary.complete is the termination condition for the poll (§2.7).
+        bool complete = false;
+        if (isObject && raw.TryGetProperty("summary", out var summary))
+        {
+            complete = OptBool(summary, "complete") ?? false;
+        }
+
         return new OutcomeResult(
-            FrameId:     frameId,
-            Outcome:     outcome,
-            Error:       error,
-            TagsFired:   tagsFired,
-            Reasoning:   reasoning,
-            SoulVersion: soulVersion,
-            FinishedAt:  finishedAt,
-            Raw:         raw);
+            FrameId:      frameId,
+            Outcome:      outcome,
+            DivisionId:   divisionId,
+            WorkspaceIds: workspaceIds,
+            Complete:     complete,
+            Error:        error,
+            TagsFired:    tagsFired,
+            Reasoning:    reasoning,
+            SoulVersion:  soulVersion,
+            FinishedAt:   finishedAt,
+            Raw:          raw);
     }
 
     internal static NotificationPrefs ParseNotificationPrefs(JsonElement raw)

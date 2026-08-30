@@ -73,9 +73,26 @@ public sealed record CaptureResult(
     [property: JsonIgnore]                           JsonElement                 Raw
 );
 
+// Returned by AwaitOutcomeAsync (sdk-spec.md §7.3). Per-workspace
+// reasoning results for a captured frame: a frame is division-scoped, so
+// it fans out to every workspace in its division and produces one trace
+// per workspace, each entry in Reasoning naming the workspace_id that
+// produced it.
+//
+// Outcome is a fold over Reasoning computed server-side, with precedence
+// failed > held > applied > no_change > skipped (§2.7). It is null until
+// at least one trace exists — never guessed. It was string.Empty when the
+// key was absent, which is neither a real outcome nor distinguishable
+// from one.
+//
+// XML doc comments are illegal on record parameters, so this is a plain
+// comment block.
 public sealed record OutcomeResult(
     [property: JsonPropertyName("frame_id")]         string                      FrameId,
-    [property: JsonPropertyName("outcome")]          string                      Outcome,
+    [property: JsonPropertyName("outcome")]          string?                     Outcome,
+    [property: JsonPropertyName("division_id")]      string?                     DivisionId,
+    [property: JsonPropertyName("workspace_ids")]    JsonElement?                WorkspaceIds,
+    [property: JsonPropertyName("complete")]         bool                        Complete,
     [property: JsonPropertyName("error")]            JsonElement?                Error,
     [property: JsonPropertyName("tags_fired")]       JsonElement?                TagsFired,
     [property: JsonPropertyName("reasoning")]        JsonElement?                Reasoning,
