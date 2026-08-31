@@ -19,7 +19,7 @@
     anywhere in this file makes VERSION multi-line and breaks them again.
   -->
   <PropertyGroup>
-    <DMZAgentSpecVersion>0.8.0</DMZAgentSpecVersion>
+    <DMZAgentSpecVersion>0.9.0</DMZAgentSpecVersion>
     <!--
       The SDK package version. Decoupled from DMZAgentSpecVersion as of
       v0.6.0 — additive Concordia MCP client surface (#221 / MCP-1.5b)

@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Circuit-breaker state cache** (spec §4.4). `CheckAsync()` is a
+  network round trip in front of a sensitive action; `cbCacheTtl` lets a
+  repeat check on the same subject come from memory instead. Off when
+  null or `TimeSpan.Zero`, which is the default.
+
+  `cbCacheMaxEntries` bounds it — the key is a subject id, so an agent
+  seeing many subjects would otherwise hold an entry for each for the
+  life of the process — and evicts least-recently-used first.
+  `CheckAsync(fresh: true)` skips the cache and refreshes it;
+  `GuardAsync` passes `fresh` through. All three constructor overloads
+  accept the settings.
+- `CheckResult.Cached`, `.CacheAge`, `.Stale`. A caller recording a
+  denial has to be able to tell it read four-second-old state. The
+  server's own `LatencyMs`, `RouteLatencyMs`, `CheckedAt` and `Raw` are
+  left alone on a cached result — they describe the check that happened.
+- `CbCacheOnError.LastKnown` serves the last known state for a subject,
+  marked `Stale`, when the check cannot reach the server. It throws when
+  nothing is known for that subject, and cannot be set without a TTL to
+  fall back on. A `429` stays a `DMZAgentRateLimitException`: the server
+  answered, and the `RetryAfter` is worth acting on. An enum rather than
+  a string, so a typo cannot become a different safety posture.
+
+### Changed
+- Spec pin `<DMZAgentSpecVersion>` moves to `0.9.0`. The `SpecVersion`
+  constant and the default User-Agent are generated from it, so they
+  follow automatically — this repo already had the single-sourcing the
+  other three SDKs needed adding.
+- README's Configuration table and Spec-conformance section still cited
+  `0.5.0`; both now derive from the pin rather than restating a literal.
+
 ## [0.6.0] — 2026-06-02
 
 ### Added

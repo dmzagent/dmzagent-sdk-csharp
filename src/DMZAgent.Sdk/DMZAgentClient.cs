@@ -81,6 +81,8 @@ public sealed class DMZAgentClient : IDisposable
     private readonly string     _baseUrl;
     private readonly string     _apiKey;
     private readonly string     _userAgent;
+    private readonly CbStateCache   _cbCache;
+    private readonly CbCacheOnError _cbCacheOnError;
     private          bool       _disposed;
 
     /// <summary>
@@ -95,8 +97,13 @@ public sealed class DMZAgentClient : IDisposable
         string   apiKey,
         string?  baseUrl   = null,
         TimeSpan? timeout  = null,
-        string?  userAgent = null)
-        : this(apiKey, handler: null, baseUrl: baseUrl, timeout: timeout, userAgent: userAgent)
+        string?  userAgent = null,
+        TimeSpan? cbCacheTtl = null,
+        int cbCacheMaxEntries = CbStateCache.DefaultMaxEntries,
+        CbCacheOnError cbCacheOnError = CbCacheOnError.Raise)
+        : this(apiKey, handler: null, baseUrl: baseUrl, timeout: timeout, userAgent: userAgent,
+               cbCacheTtl: cbCacheTtl, cbCacheMaxEntries: cbCacheMaxEntries,
+               cbCacheOnError: cbCacheOnError)
     {
     }
 
@@ -111,7 +118,10 @@ public sealed class DMZAgentClient : IDisposable
         HttpMessageHandler?  handler,
         string?              baseUrl   = null,
         TimeSpan?            timeout   = null,
-        string?              userAgent = null)
+        string?              userAgent = null,
+        TimeSpan?            cbCacheTtl = null,
+        int                  cbCacheMaxEntries = CbStateCache.DefaultMaxEntries,
+        CbCacheOnError       cbCacheOnError = CbCacheOnError.Raise)
     {
         // Validation per sdk-spec.md §1.2 — empty key and bad-prefix key
         // are both bounced at construction, before any request goes out.
@@ -120,6 +130,18 @@ public sealed class DMZAgentClient : IDisposable
             throw new DMZAgentValidationException(
                 "api_key must start with 'ck_' — get one from your tenant_admin");
         }
+
+        var ttlSet = cbCacheTtl is { } cacheTtl && cacheTtl > TimeSpan.Zero;
+        if (cbCacheOnError == CbCacheOnError.LastKnown && !ttlSet)
+        {
+            // There is nothing to fall back TO until the caller has opted
+            // into the cache. Accepting this pair would leave someone
+            // believing they had an outage story that can never fire.
+            throw new DMZAgentValidationException(
+                "cbCacheOnError LastKnown needs a cbCacheTtl above zero");
+        }
+        _cbCache        = new CbStateCache(cbCacheTtl, cbCacheMaxEntries);
+        _cbCacheOnError = cbCacheOnError;
 
         _baseUrl   = (baseUrl ?? DefaultBaseUrl).TrimEnd('/');
         _apiKey    = apiKey;
@@ -144,16 +166,28 @@ public sealed class DMZAgentClient : IDisposable
     /// <summary>Construct a client that reuses a caller-managed
     /// <see cref="HttpClient"/>. The SDK will NOT dispose it.</summary>
     public DMZAgentClient(
-        string      apiKey,
-        HttpClient  httpClient,
-        string?     baseUrl   = null,
-        string?     userAgent = null)
+        string         apiKey,
+        HttpClient     httpClient,
+        string?        baseUrl   = null,
+        string?        userAgent = null,
+        TimeSpan?      cbCacheTtl = null,
+        int            cbCacheMaxEntries = CbStateCache.DefaultMaxEntries,
+        CbCacheOnError cbCacheOnError = CbCacheOnError.Raise)
     {
         if (string.IsNullOrEmpty(apiKey) || !apiKey.StartsWith("ck_", StringComparison.Ordinal))
         {
             throw new DMZAgentValidationException(
                 "api_key must start with 'ck_' — get one from your tenant_admin");
         }
+
+        var ttlSet = cbCacheTtl is { } cacheTtl && cacheTtl > TimeSpan.Zero;
+        if (cbCacheOnError == CbCacheOnError.LastKnown && !ttlSet)
+        {
+            throw new DMZAgentValidationException(
+                "cbCacheOnError LastKnown needs a cbCacheTtl above zero");
+        }
+        _cbCache        = new CbStateCache(cbCacheTtl, cbCacheMaxEntries);
+        _cbCacheOnError = cbCacheOnError;
 
         _baseUrl        = (baseUrl ?? DefaultBaseUrl).TrimEnd('/');
         _apiKey         = apiKey;
@@ -362,7 +396,8 @@ public sealed class DMZAgentClient : IDisposable
     public async Task<CheckResult> CheckAsync(
         string?           subjectId      = null,
         string?           interactionId  = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool              fresh          = false)
     {
         var hasSubject     = !string.IsNullOrEmpty(subjectId);
         var hasInteraction = !string.IsNullOrEmpty(interactionId);
@@ -373,6 +408,12 @@ public sealed class DMZAgentClient : IDisposable
 
         var scope    = hasSubject ? "subject" : "interaction";
         var scopeRef = (hasSubject ? subjectId : interactionId)!;
+        var cacheKey = CbStateCache.Key(scope, scopeRef);
+
+        if (!fresh && _cbCache.Get(cacheKey) is { } hit)
+        {
+            return hit.Result.AsCached(hit.Age);
+        }
 
         var body = new Dictionary<string, object?>
         {
@@ -380,8 +421,28 @@ public sealed class DMZAgentClient : IDisposable
             ["scope_ref"] = scopeRef,
         };
 
-        var raw = await PostJsonAsync("/v1/cb/check", body, cancellationToken).ConfigureAwait(false);
-        return ParseCheckResult(raw);
+        JsonElement raw;
+        try
+        {
+            raw = await PostJsonAsync("/v1/cb/check", body, cancellationToken).ConfigureAwait(false);
+        }
+        catch (DMZAgentServerException)
+        {
+            // Network, timeout, or 5xx — the server could not answer.
+            // Deliberately NOT the rate-limit exception: a 429 is an
+            // answer, and it carries a RetryAfter the caller can act on.
+            // Hiding it behind a cached state would drop that signal.
+            if (_cbCacheOnError == CbCacheOnError.LastKnown &&
+                _cbCache.GetAny(cacheKey) is { } fallback)
+            {
+                return fallback.Result.AsCached(fallback.Age, stale: true);
+            }
+            throw;
+        }
+
+        var result = ParseCheckResult(raw);
+        _cbCache.Put(cacheKey, result);
+        return result;
     }
 
     /// <summary>
@@ -397,9 +458,11 @@ public sealed class DMZAgentClient : IDisposable
         string?           subjectId      = null,
         string?           interactionId  = null,
         bool              raiseOnOpen    = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool              fresh          = false)
     {
-        var result = await CheckAsync(subjectId, interactionId, cancellationToken).ConfigureAwait(false);
+        var result = await CheckAsync(subjectId, interactionId, cancellationToken, fresh)
+            .ConfigureAwait(false);
         if (raiseOnOpen && !result.Allow)
         {
             throw new CircuitBreakerOpenException(

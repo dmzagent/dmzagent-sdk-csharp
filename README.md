@@ -3,7 +3,7 @@
 Official .NET client for the [DMZAgent](https://spec.dmzagent.com)
 agent-stream and circuit-breaker APIs.
 
-This package implements **spec version 0.5.0** — same constructor
+This package implements **spec version 0.9.0** — same constructor
 shape, same methods, same return types, same error hierarchy, same wire
 protocol as the Python, TypeScript, and Java SDKs. The naming follows
 the C# convention map in §8 of the spec.
@@ -168,7 +168,10 @@ multiple times is a no-op.
 | `apiKey`    | required, must start with `ck_`  |
 | `baseUrl`   | `https://api.dmzagent.com`      |
 | `timeout`   | 10 seconds                        |
-| `userAgent` | `dmzagent-csharp/0.5.0`         |
+| `userAgent` | `dmzagent-csharp/<spec version>` |
+| `cbCacheTtl` | `null` (state cache off)        |
+| `cbCacheMaxEntries` | `1024`                   |
+| `cbCacheOnError` | `CbCacheOnError.Raise`      |
 
 For testing or self-hosted environments, pass a custom
 `HttpMessageHandler`:
@@ -180,12 +183,48 @@ using var cx = new DMZAgentClient(
     baseUrl: "http://localhost:8080");
 ```
 
+### Circuit-breaker state cache
+
+`CheckAsync()` is a network round trip, and it usually sits in front of
+the sensitive action. A per-client cache removes it for repeated checks
+on the same subject. It is off unless you pass a TTL:
+
+```csharp
+using var cx = new DMZAgentClient(
+    apiKey:            "ck_...",
+    cbCacheTtl:        TimeSpan.FromSeconds(5),   // null or Zero is off
+    cbCacheMaxEntries: 1024,                      // bounded, LRU evicted
+    cbCacheOnError:    CbCacheOnError.LastKnown); // or Raise (default)
+
+var r = await cx.CheckAsync(subjectId: "user:ws:bot");
+r.Cached;    // served from memory?
+r.CacheAge;  // how old it was
+r.Stale;     // served because the check itself failed
+
+await cx.CheckAsync(subjectId: "user:ws:bot", fresh: true); // skip and refresh
+```
+
+Read the TTL as **the longest a newly-opened breaker can go unnoticed by
+this client**. A cached `closed` is an allow the server might no longer
+give, which is why the cache is opt-in and why every result says whether
+it came from memory and how old it was.
+
+One TTL covers every state. Holding a deny longer than an allow is a
+safety policy, and it is yours to make with the value you pass.
+
+`CbCacheOnError.LastKnown` serves the last state for that subject —
+marked `Stale` — when the check cannot reach the server. With no entry
+for that subject it throws, and it needs a TTL above zero to be set at
+all. A `429` is not covered: that is the server answering, and it carries
+a `RetryAfter` worth acting on.
+
 ## Spec conformance
 
 This SDK passes the contract-test corpus pinned at
-`dmzagent-sdk-spec@v0.5.0`. The conformance run lives in
-`.github/workflows/spec-conformance.yml`; it reports a status check of
-`spec-conformance/0.5.0` to the spec-coordination workflow.
+`dmzagent-sdk-spec@v0.9.0` — the value of `<DMZAgentSpecVersion>` in
+`Directory.Build.props`, which also generates the `SpecVersion` constant
+and the default User-Agent, so the pin and the constant cannot drift.
+The conformance run lives in `.github/workflows/spec-conformance.yml`.
 
 ## License
 
