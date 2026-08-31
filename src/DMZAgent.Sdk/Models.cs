@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -58,8 +59,33 @@ public sealed record CheckResult(
     [property: JsonPropertyName("checked_at")]       string                                                          CheckedAt,
     [property: JsonPropertyName("latency_ms")]       double                                                          LatencyMs,
     [property: JsonPropertyName("route_latency_ms")] double                                                          RouteLatencyMs,
-    [property: JsonIgnore]                           JsonElement                                                     Raw
-);
+    [property: JsonIgnore]                           JsonElement                                                     Raw,
+    // How the caller got this result (spec §4.4). No counterpart on the
+    // wire: with the state cache off — the default — these are always
+    // false, Zero, false.
+    [property: JsonIgnore]                           bool                                                            Cached = false,
+    [property: JsonIgnore]                           TimeSpan                                                        CacheAge = default,
+    [property: JsonIgnore]                           bool                                                            Stale = false
+)
+{
+    /// <summary>
+    /// This result, marked as served from the cache at <paramref name="age"/> old.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="LatencyMs"/>, <see cref="RouteLatencyMs"/>,
+    /// <see cref="CheckedAt"/> and <see cref="Raw"/> are left alone: they
+    /// describe the check that actually happened, and rewriting them to
+    /// describe the cache hit would erase the only record of when the
+    /// server was last asked.
+    /// </remarks>
+    public CheckResult AsCached(TimeSpan age, bool stale = false) =>
+        this with
+        {
+            Cached   = true,
+            CacheAge = age < TimeSpan.Zero ? TimeSpan.Zero : age,
+            Stale    = stale,
+        };
+}
 
 public sealed record CaptureResult(
     [property: JsonPropertyName("frame_id")]         string                      FrameId,
