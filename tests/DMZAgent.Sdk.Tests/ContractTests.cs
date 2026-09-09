@@ -73,14 +73,46 @@ public class ContractTests
 
         stub.LastRequestPath.Should().Be(expPath, $"fixture {name}");
 
-        var capturedNorm = JsonNormalize.Canonicalize(stub.LastRequestBody!);
-        var expectedNorm = JsonNormalize.Canonicalize(expected);
-        capturedNorm.Should().Be(expectedNorm, $"fixture {name}: body mismatch");
+        // A read vector pins its verb and its query string. Asserting only
+        // the body would let a GET that sent every filter as nothing at all
+        // pass, since a GET has no body to be wrong about.
+        var expVerb = fixture.TryGetProperty("expected_method", out var mv)
+            ? mv.GetString()! : "POST";
+        stub.LastRequest!.Method.Method.Should().Be(expVerb, $"fixture {name}: verb");
+
+        if (fixture.TryGetProperty("expected_query", out var eq)
+            && eq.ValueKind == JsonValueKind.Object)
+        {
+            var got = System.Web.HttpUtility.ParseQueryString(
+                stub.LastRequest!.RequestUri!.Query);
+            var gotMap = got.AllKeys
+                .Where(k => k is not null)
+                .ToDictionary(k => k!, k => got[k]!);
+            var wantMap = eq.EnumerateObject()
+                .ToDictionary(prop => prop.Name, prop => prop.Value.GetString()!);
+            gotMap.Should().BeEquivalentTo(wantMap, $"fixture {name}: query");
+        }
+
+        if (expected.ValueKind == JsonValueKind.Null)
+        {
+            string.IsNullOrEmpty(stub.LastRequestBody).Should().BeTrue(
+                $"fixture {name}: expected no request body");
+        }
+        else
+        {
+            var capturedNorm = JsonNormalize.Canonicalize(stub.LastRequestBody!);
+            var expectedNorm = JsonNormalize.Canonicalize(expected);
+            capturedNorm.Should().Be(expectedNorm, $"fixture {name}: body mismatch");
+        }
 
         // Authorization header sanity (sdk-spec.md §1.2 / §1.3 / §1.4).
         stub.LastRequest!.Headers.Authorization!.Scheme.Should().Be("Bearer");
         stub.LastRequest!.Headers.Authorization!.Parameter.Should().Be(TestApiKey);
-        stub.LastRequest!.Content!.Headers.ContentType!.MediaType.Should().Be("application/json");
+        if (stub.LastRequest!.Content is not null)
+        {
+            stub.LastRequest!.Content!.Headers.ContentType!.MediaType
+                .Should().Be("application/json");
+        }
         stub.LastRequest!.Headers.UserAgent.ToString().Should().Contain("dmzagent-csharp/");
 
         _output.WriteLine($"✓ golden_envelopes/{name}");
@@ -364,6 +396,34 @@ public class ContractTests
                     payload:        OptDict(args, "payload"));
                 return;
 
+            // 0.10.0 — the white-label approval control and the readable ledger.
+            case "list_approvals":
+                await cx.ListApprovalsAsync(
+                    status:    OptString(args, "status"),
+                    subjectId: OptString(args, "subject_id"),
+                    limit:     OptInt(args, "limit"),
+                    cursor:    OptString(args, "cursor"));
+                return;
+
+            case "decide_approval":
+                await cx.DecideApprovalAsync(
+                    approvalId: args.GetProperty("approval_id").GetString()!,
+                    decision:   OptString(args, "decision")!,
+                    actorId:    OptString(args, "actor_id")!,
+                    actorLabel: OptString(args, "actor_label"),
+                    reason:     OptString(args, "reason"));
+                return;
+
+            case "get_incidents":
+                await cx.GetIncidentsAsync(
+                    status:    OptString(args, "status"),
+                    subjectId: OptString(args, "subject_id"),
+                    since:     OptString(args, "since"),
+                    until:     OptString(args, "until"),
+                    limit:     OptInt(args, "limit"),
+                    cursor:    OptString(args, "cursor"));
+                return;
+
             default:
                 throw new InvalidOperationException($"runner: unsupported method '{method}'");
         }
@@ -371,6 +431,10 @@ public class ContractTests
 
     private static string? OptString(JsonElement el, string name)
         => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static int? OptInt(JsonElement el, string name)
+        => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt32() : null;
 
     private static IReadOnlyDictionary<string, object?>? OptDict(JsonElement el, string name)
     {

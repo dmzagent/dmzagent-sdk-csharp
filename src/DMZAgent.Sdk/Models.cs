@@ -65,9 +65,24 @@ public sealed record CheckResult(
     // false, Zero, false.
     [property: JsonIgnore]                           bool                                                            Cached = false,
     [property: JsonIgnore]                           TimeSpan                                                        CacheAge = default,
-    [property: JsonIgnore]                           bool                                                            Stale = false
+    [property: JsonIgnore]                           bool                                                            Stale = false,
+    // The approval this denial is waiting on, or null (spec §2.2).
+    // Non-null only alongside Allow == false. It is a field rather than a
+    // fourth breaker state so that code reading Allow alone still refuses:
+    // a client that has never heard of approvals must not start allowing
+    // what it used to deny.
+    [property: JsonPropertyName("pending_approval_id")] string?                                                      PendingApprovalId = null
 )
 {
+    /// <summary>
+    /// This is an ask, not a refusal — a human can still clear it.
+    ///
+    /// <para>The difference <see cref="PendingApprovalId"/> exists to
+    /// express: branch on it to show your approval UI instead of telling
+    /// the user no.</para>
+    /// </summary>
+    public bool AwaitingApproval => PendingApprovalId is not null;
+
     /// <summary>
     /// This result, marked as served from the cache at <paramref name="age"/> old.
     /// </summary>
@@ -159,3 +174,145 @@ public sealed record ReviewEvent(
     [property: JsonPropertyName("occurred_at")]      string          OccurredAt,
     [property: JsonIgnore]                           JsonElement     Raw
 );
+
+// ---------------------------------------------------------------------------
+// Human-in-the-loop approvals and the incident ledger (spec §2.8–§2.10, 0.10.0)
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// The human half of an <see cref="Approval"/> — who decided, and why.
+///
+/// <para><see cref="ActorId"/> is the <em>caller's</em> identifier for a
+/// person, not ours. We resolve it against no directory and store it as
+/// given, which is what lets a customer's own users decide without ever
+/// holding an account here.</para>
+/// </summary>
+public sealed record ApprovalDecision(
+    [property: JsonPropertyName("decision")]    string  Decision,
+    [property: JsonPropertyName("actor_id")]    string  ActorId,
+    [property: JsonPropertyName("actor_label")] string? ActorLabel,
+    [property: JsonPropertyName("reason")]      string? Reason,
+    [property: JsonPropertyName("decided_at")]  string  DecidedAt
+);
+
+/// <summary>
+/// An action held pending a human decision (spec §7.12).
+///
+/// <para>Every field here is something <em>you</em> render. There is no
+/// message written for your end user, no copy of ours, and no display
+/// string: <see cref="Reason"/> and each <see cref="FiredPolicies"/>
+/// entry's name are the words your operator typed when they wrote the
+/// policy, and <see cref="Action"/> is the call your agent was about to
+/// make. Building display text out of them is your job precisely because
+/// a sentence we wrote would read the same in every customer's
+/// product.</para>
+///
+/// <para><see cref="ExpiresAt"/> stays the server's ISO-8601 string rather
+/// than a parsed countdown. Seconds-remaining computed at parse time is
+/// wrong by however long you held the object, and the caller rendering an
+/// approval deadline is exactly the caller who holds it.</para>
+/// </summary>
+public sealed record Approval(
+    [property: JsonPropertyName("approval_id")]    string                                              ApprovalId,
+    [property: JsonPropertyName("status")]         string                                              Status,
+    [property: JsonPropertyName("subject_id")]     string                                              SubjectId,
+    [property: JsonPropertyName("interaction_id")] string?                                             InteractionId,
+    [property: JsonPropertyName("frame_id")]       string?                                             FrameId,
+    // The held call, verbatim: {tool, args}.
+    [property: JsonPropertyName("action")]         IReadOnlyDictionary<string, object?>                Action,
+    [property: JsonPropertyName("reason")]         string                                              Reason,
+    [property: JsonPropertyName("fired_policies")] IReadOnlyList<IReadOnlyDictionary<string, object?>> FiredPolicies,
+    [property: JsonPropertyName("requested_at")]   string                                              RequestedAt,
+    [property: JsonPropertyName("expires_at")]     string                                              ExpiresAt,
+    // Always "decline". An approval that becomes an allow because nobody
+    // looked at it is a delay with extra steps, not a control (spec §2.9).
+    [property: JsonPropertyName("on_expiry")]      string                                              OnExpiry,
+    [property: JsonPropertyName("anchor")]         IReadOnlyDictionary<string, object?>?               Anchor,
+    [property: JsonPropertyName("decision")]       ApprovalDecision?                                   Decision,
+    [property: JsonIgnore]                         JsonElement                                         Raw
+)
+{
+    /// <summary><c>true</c> while nobody has decided.</summary>
+    public bool IsPending => Status == "pending";
+
+    /// <summary>The tool this approval is holding, or <c>""</c> when absent.</summary>
+    public string Tool => Action.TryGetValue("tool", out var t) && t is string s ? s : string.Empty;
+}
+
+/// <summary>
+/// One page of <c>DMZAgentClient.ListApprovalsAsync</c> (spec §7.11).
+///
+/// <para><see cref="NextCursor"/> is <c>null</c> on the last page. Nothing
+/// here follows it for you — see
+/// <c>DMZAgentClient.IterApprovalsAsync</c>.</para>
+/// </summary>
+public sealed record ApprovalPage(
+    [property: JsonPropertyName("approvals")]   IReadOnlyList<Approval> Approvals,
+    [property: JsonPropertyName("next_cursor")] string?                 NextCursor,
+    [property: JsonIgnore]                      JsonElement             Raw
+)
+{
+    public int Count => Approvals.Count;
+}
+
+/// <summary>One thing that was done about an <see cref="Incident"/> (spec §7.14).</summary>
+public sealed record Remediation(
+    [property: JsonPropertyName("remediation_id")] string                                RemediationId,
+    [property: JsonPropertyName("kind")]           string                                Kind,
+    [property: JsonPropertyName("outcome")]        string                                Outcome,
+    [property: JsonPropertyName("approval_id")]    string?                               ApprovalId,
+    [property: JsonPropertyName("actor_id")]       string?                               ActorId,
+    [property: JsonPropertyName("reason")]         string?                               Reason,
+    [property: JsonPropertyName("occurred_at")]    string                                OccurredAt,
+    [property: JsonPropertyName("anchor")]         IReadOnlyDictionary<string, object?>? Anchor
+);
+
+/// <summary>
+/// One entry of the append-only incident ledger (spec §7.14).
+///
+/// <para><see cref="Anchor"/> is the ledger entry that opened this incident,
+/// in the same <c>{ledger_index, hash}</c> shape
+/// <see cref="CheckResult.Anchor"/> carries. A caller who recorded an anchor
+/// at check time can find that entry here and compare hashes; a mismatch is
+/// the one alarm the ledger exists to make possible.</para>
+///
+/// <para>An incident with no remediations and status <c>open</c> is the
+/// normal shape of something nobody has answered yet — not an error, and not
+/// something to collapse to null.</para>
+/// </summary>
+public sealed record Incident(
+    [property: JsonPropertyName("incident_id")]    string                                              IncidentId,
+    [property: JsonPropertyName("status")]         string                                              Status,
+    [property: JsonPropertyName("kind")]           string                                              Kind,
+    [property: JsonPropertyName("subject_id")]     string                                              SubjectId,
+    [property: JsonPropertyName("frame_id")]       string?                                             FrameId,
+    [property: JsonPropertyName("opened_at")]      string                                              OpenedAt,
+    [property: JsonPropertyName("closed_at")]      string?                                             ClosedAt,
+    [property: JsonPropertyName("reason")]         string                                              Reason,
+    [property: JsonPropertyName("fired_policies")] IReadOnlyList<IReadOnlyDictionary<string, object?>> FiredPolicies,
+    // Oldest first. MAY be empty.
+    [property: JsonPropertyName("remediations")]   IReadOnlyList<Remediation>                          Remediations,
+    [property: JsonPropertyName("anchor")]         IReadOnlyDictionary<string, object?>?               Anchor,
+    [property: JsonIgnore]                         JsonElement                                         Raw
+)
+{
+    /// <summary><c>true</c> while nobody has answered this.</summary>
+    public bool IsOpen => Status == "open";
+}
+
+/// <summary>
+/// One page of <c>DMZAgentClient.GetIncidentsAsync</c> (spec §7.13).
+///
+/// <para>Newest <c>ledger_index</c> first, as the server ordered it. The SDK
+/// does not re-sort: ordering by a timestamp cannot separate two entries
+/// written in the same second, and the ledger's own order is the one that
+/// means something.</para>
+/// </summary>
+public sealed record IncidentPage(
+    [property: JsonPropertyName("incidents")]   IReadOnlyList<Incident> Incidents,
+    [property: JsonPropertyName("next_cursor")] string?                 NextCursor,
+    [property: JsonIgnore]                      JsonElement             Raw
+)
+{
+    public int Count => Incidents.Count;
+}

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -669,6 +671,240 @@ public sealed class DMZAgentClient : IDisposable
     }
 
     // =================================================================== //
+    // Human-in-the-loop approvals (spec §2.8–§2.9, §5.16–§5.18)           //
+    // =================================================================== //
+
+    /// <summary>
+    /// One page of approvals awaiting a human decision.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the read half of the white-label control: you render
+    /// these in your own product, with your own words. Nothing in an
+    /// <see cref="Approval"/> is display text we wrote.</para>
+    /// <para>Does not follow <c>NextCursor</c>. A caller who asked for 25
+    /// got 25, and a method that quietly walked every page would turn one
+    /// bounded request into an unbounded one against a record that only
+    /// grows. Use <see cref="IterApprovalsAsync"/> when you want the
+    /// walk.</para>
+    /// </remarks>
+    /// <param name="status"><c>pending</c> (default) | <c>approved</c> | <c>declined</c> | <c>expired</c>.</param>
+    /// <param name="subjectId">Restrict to one subject.</param>
+    /// <param name="limit">1–100. Defaults to the server's 25.</param>
+    /// <param name="cursor">From a previous page's <c>NextCursor</c>.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    public async Task<ApprovalPage> ListApprovalsAsync(
+        string?           status            = null,
+        string?           subjectId         = null,
+        int?              limit             = null,
+        string?           cursor            = null,
+        CancellationToken cancellationToken = default)
+    {
+        var query = new List<KeyValuePair<string, string>>
+        {
+            new("status", status ?? "pending"),
+        };
+        if (subjectId is not null) query.Add(new("subject_id", subjectId));
+        if (limit is { } l)
+        {
+            RequirePageLimit(l);
+            query.Add(new("limit", l.ToString(CultureInfo.InvariantCulture)));
+        }
+        if (cursor is not null) query.Add(new("cursor", cursor));
+
+        var raw = await GetJsonAsync("/v1/approvals" + QueryString(query), cancellationToken)
+            .ConfigureAwait(false);
+        return ParseApprovalPage(raw);
+    }
+
+    /// <summary>
+    /// Lazily walk every page of <see cref="ListApprovalsAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Fetches a page only when the consumer asks for an item past the ones
+    /// it holds. Breaking out of the <c>await foreach</c> means the next page
+    /// is never requested — which is the whole reason this is an
+    /// <see cref="IAsyncEnumerable{T}"/> and not a list.
+    /// </remarks>
+    public async IAsyncEnumerable<Approval> IterApprovalsAsync(
+        string? status    = null,
+        string? subjectId = null,
+        int?    limit     = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        string? cursor = null;
+        while (true)
+        {
+            var page = await ListApprovalsAsync(
+                status, subjectId, limit, cursor, cancellationToken).ConfigureAwait(false);
+            foreach (var a in page.Approvals) yield return a;
+            if (string.IsNullOrEmpty(page.NextCursor)) yield break;
+            cursor = page.NextCursor;
+        }
+    }
+
+    /// <summary>
+    /// Approve or decline a held action, on behalf of a named human.
+    /// </summary>
+    /// <remarks>
+    /// <para><paramref name="actorId"/> is required and is <em>your</em>
+    /// identifier for the person who decided. It is never defaulted and
+    /// never derived from the API key: the key identifies your integration,
+    /// and an approval whose actor is the integration that requested it has
+    /// recorded nobody. We resolve it against no directory, so your users
+    /// never need an account here.</para>
+    /// </remarks>
+    /// <exception cref="DMZAgentValidationException">
+    /// Locally — with no round trip — when <paramref name="actorId"/> is
+    /// blank or <paramref name="decision"/> is not approve/decline, because
+    /// a caller who has not got a human's identity at this point does not
+    /// have a human, and the failure belongs where the mistake is.
+    /// </exception>
+    /// <exception cref="DMZAgentConflictException">
+    /// The approval was already decided or has expired. That is not a
+    /// transient fault to retry: someone else decided, or the window closed.
+    /// </exception>
+    public async Task<Approval> DecideApprovalAsync(
+        string            approvalId,
+        string            decision,
+        string            actorId,
+        string?           actorLabel        = null,
+        string?           reason            = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (decision != "approve" && decision != "decline")
+        {
+            throw new DMZAgentValidationException(
+                $"decision must be approve or decline, got {decision ?? "null"}");
+        }
+        if (string.IsNullOrWhiteSpace(actorId))
+        {
+            throw new DMZAgentValidationException(
+                "actorId is required: a human-in-the-loop decision has to "
+                + "record which human made it");
+        }
+
+        var body = new Dictionary<string, object?>
+        {
+            ["decision"] = decision,
+            ["actor_id"] = actorId,
+        };
+        if (actorLabel is not null) body["actor_label"] = actorLabel;
+        if (reason is not null)     body["reason"]      = reason;
+
+        var path = $"/v1/approvals/{Uri.EscapeDataString(approvalId)}/decision";
+        var raw  = await PostJsonAsync(path, body, cancellationToken).ConfigureAwait(false);
+        return ParseApproval(raw);
+    }
+
+    /// <summary><c>DecideApprovalAsync(..., "approve")</c>. <paramref name="actorId"/> stays required.</summary>
+    public Task<Approval> ApproveApprovalAsync(
+        string approvalId, string actorId, string? actorLabel = null,
+        string? reason = null, CancellationToken cancellationToken = default)
+        => DecideApprovalAsync(approvalId, "approve", actorId, actorLabel, reason, cancellationToken);
+
+    /// <summary><c>DecideApprovalAsync(..., "decline")</c>. <paramref name="actorId"/> stays required.</summary>
+    public Task<Approval> DeclineApprovalAsync(
+        string approvalId, string actorId, string? actorLabel = null,
+        string? reason = null, CancellationToken cancellationToken = default)
+        => DecideApprovalAsync(approvalId, "decline", actorId, actorLabel, reason, cancellationToken);
+
+    // =================================================================== //
+    // The incident and remediation ledger (spec §2.10, §5.19–§5.21)       //
+    // =================================================================== //
+
+    /// <summary>
+    /// One page of the incident and remediation ledger.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every breaker that opened, every approval decided, every
+    /// remediation that ran — newest ledger entry first. This is the
+    /// readable form of the anchor that <see cref="CheckAsync"/> hands back:
+    /// record it at check time, find that <c>ledger_index</c> here, and
+    /// compare hashes. A mismatch is the alarm the ledger exists for.</para>
+    /// <para>Does not follow <c>NextCursor</c> — see
+    /// <see cref="IterIncidentsAsync"/>.</para>
+    /// </remarks>
+    public async Task<IncidentPage> GetIncidentsAsync(
+        string?           status            = null,
+        string?           subjectId         = null,
+        string?           since             = null,
+        string?           until             = null,
+        int?              limit             = null,
+        string?           cursor            = null,
+        CancellationToken cancellationToken = default)
+    {
+        var query = new List<KeyValuePair<string, string>>
+        {
+            new("status", status ?? "all"),
+        };
+        if (subjectId is not null) query.Add(new("subject_id", subjectId));
+        if (since is not null)     query.Add(new("since", since));
+        if (until is not null)     query.Add(new("until", until));
+        if (limit is { } l)
+        {
+            RequirePageLimit(l);
+            query.Add(new("limit", l.ToString(CultureInfo.InvariantCulture)));
+        }
+        if (cursor is not null) query.Add(new("cursor", cursor));
+
+        var raw = await GetJsonAsync("/v1/incidents" + QueryString(query), cancellationToken)
+            .ConfigureAwait(false);
+        return ParseIncidentPage(raw);
+    }
+
+    /// <summary>Lazily walk every page of <see cref="GetIncidentsAsync"/>, on §5.17's terms.</summary>
+    public async IAsyncEnumerable<Incident> IterIncidentsAsync(
+        string? status    = null,
+        string? subjectId = null,
+        string? since     = null,
+        string? until     = null,
+        int?    limit     = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        string? cursor = null;
+        while (true)
+        {
+            var page = await GetIncidentsAsync(
+                status, subjectId, since, until, limit, cursor, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var i in page.Incidents) yield return i;
+            if (string.IsNullOrEmpty(page.NextCursor)) yield break;
+            cursor = page.NextCursor;
+        }
+    }
+
+    // There is deliberately no CloseIncidentAsync / ResolveIncidentAsync.
+    // The ledger is append-only and has no endpoint for one: an incident
+    // reaches "remediated" because a remediation was appended to it, and a
+    // convenience method that read as closing one would describe a ledger
+    // this is not (spec §5.21).
+
+    /// <summary>Reject a page size the server would reject, before the round trip.</summary>
+    private static void RequirePageLimit(int limit)
+    {
+        if (limit < 1 || limit > 100)
+        {
+            throw new DMZAgentValidationException(
+                $"limit must be an integer in 1..100, got {limit}");
+        }
+    }
+
+    /// <summary>Build a query string from already-decoded values.</summary>
+    private static string QueryString(IReadOnlyList<KeyValuePair<string, string>> pairs)
+    {
+        if (pairs.Count == 0) return string.Empty;
+        var sb = new StringBuilder("?");
+        for (var i = 0; i < pairs.Count; i++)
+        {
+            if (i > 0) sb.Append('&');
+            sb.Append(Uri.EscapeDataString(pairs[i].Key))
+              .Append('=')
+              .Append(Uri.EscapeDataString(pairs[i].Value));
+        }
+        return sb.ToString();
+    }
+
+    // =================================================================== //
     // Lifecycle                                                            //
     // =================================================================== //
 
@@ -857,12 +1093,17 @@ public sealed class DMZAgentClient : IDisposable
             // StatusCode tells them apart for callers that care.
             400 or 422 => new DMZAgentValidationException(
                 $"server rejected request to {path}: {detail}", status, bodyForException),
-            // 409 is the Idempotency-Key in-flight conflict (§1.8). Kept
-            // above the >= 500 arm and off it entirely: the duplicate is the
-            // caller's own earlier request, so retrying the same key replays
-            // its stored response instead of causing a second side effect.
+            // 409 has two causes and one type (§3). Either the caller's own
+            // earlier request is still in flight under this Idempotency-Key
+            // (§1.8), or an approval was already decided or has expired
+            // (§2.9). Neither is transient — the call did not fail, it lost —
+            // so this stays above the >= 500 arm and off it entirely, and the
+            // message names which one it was rather than asserting the older
+            // cause on every path.
             409 => new DMZAgentConflictException(
-                $"a request with this Idempotency-Key is already in flight on {path}",
+                SettledApprovalStatus(jsonBody) is { } settled
+                    ? $"approval already {settled} on {path}"
+                    : $"a request with this Idempotency-Key is already in flight on {path}",
                 status, bodyForException),
             429 => new DMZAgentRateLimitException(
                 $"rate limited on {path}", status, bodyForException,
@@ -969,7 +1210,166 @@ public sealed class DMZAgentClient : IDisposable
             CheckedAt:      checkedAt,
             LatencyMs:      latencyMs,
             RouteLatencyMs: routeLatencyMs,
-            Raw:            raw);
+            Raw:            raw,
+            PendingApprovalId: OptString(raw, "pending_approval_id"));
+    }
+
+    /// <summary>
+    /// The approval status carried by a 409 body, or null.
+    /// </summary>
+    /// <remarks>
+    /// How a caller tells the two 409s apart (§3): a settled approval says
+    /// what it had already become; an idempotency conflict says nothing.
+    /// </remarks>
+    private static string? SettledApprovalStatus(JsonElement? body)
+    {
+        if (body is not { } b || b.ValueKind != JsonValueKind.Object) return null;
+        var s = OptString(b, "status");
+        return string.IsNullOrEmpty(s) ? null : s;
+    }
+
+    internal static Approval ParseApproval(JsonElement raw)
+    {
+        var firedPolicies = new List<IReadOnlyDictionary<string, object?>>();
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("fired_policies", out var fp)
+            && fp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in fp.EnumerateArray()) firedPolicies.Add(JsonObjectToDict(entry));
+        }
+
+        IReadOnlyDictionary<string, object?> action = new Dictionary<string, object?>();
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("action", out var act)
+            && act.ValueKind == JsonValueKind.Object)
+        {
+            action = JsonObjectToDict(act);
+        }
+
+        IReadOnlyDictionary<string, object?>? anchor = null;
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("anchor", out var anc)
+            && anc.ValueKind == JsonValueKind.Object)
+        {
+            anchor = JsonObjectToDict(anc);
+        }
+
+        ApprovalDecision? decision = null;
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("decision", out var dec)
+            && dec.ValueKind == JsonValueKind.Object)
+        {
+            decision = new ApprovalDecision(
+                Decision:   OptString(dec, "decision") ?? string.Empty,
+                ActorId:    OptString(dec, "actor_id") ?? string.Empty,
+                ActorLabel: OptString(dec, "actor_label"),
+                Reason:     OptString(dec, "reason"),
+                DecidedAt:  OptString(dec, "decided_at") ?? string.Empty);
+        }
+
+        return new Approval(
+            ApprovalId:    OptString(raw, "approval_id") ?? string.Empty,
+            Status:        OptString(raw, "status") ?? string.Empty,
+            SubjectId:     OptString(raw, "subject_id") ?? string.Empty,
+            InteractionId: OptString(raw, "interaction_id"),
+            FrameId:       OptString(raw, "frame_id"),
+            Action:        action,
+            Reason:        OptString(raw, "reason") ?? string.Empty,
+            FiredPolicies: firedPolicies,
+            RequestedAt:   OptString(raw, "requested_at") ?? string.Empty,
+            ExpiresAt:     OptString(raw, "expires_at") ?? string.Empty,
+            // Not read from the server: expiry declines, and a server that
+            // ever sent "approve" would be describing a control this SDK
+            // does not implement (spec §2.9).
+            OnExpiry:      "decline",
+            Anchor:        anchor,
+            Decision:      decision,
+            Raw:           raw);
+    }
+
+    internal static ApprovalPage ParseApprovalPage(JsonElement raw)
+    {
+        var items = new List<Approval>();
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("approvals", out var arr)
+            && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in arr.EnumerateArray()) items.Add(ParseApproval(entry));
+        }
+        return new ApprovalPage(items, OptString(raw, "next_cursor"), raw);
+    }
+
+    internal static Remediation ParseRemediation(JsonElement raw)
+    {
+        IReadOnlyDictionary<string, object?>? anchor = null;
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("anchor", out var anc)
+            && anc.ValueKind == JsonValueKind.Object)
+        {
+            anchor = JsonObjectToDict(anc);
+        }
+        return new Remediation(
+            RemediationId: OptString(raw, "remediation_id") ?? string.Empty,
+            Kind:          OptString(raw, "kind") ?? string.Empty,
+            Outcome:       OptString(raw, "outcome") ?? string.Empty,
+            ApprovalId:    OptString(raw, "approval_id"),
+            ActorId:       OptString(raw, "actor_id"),
+            Reason:        OptString(raw, "reason"),
+            OccurredAt:    OptString(raw, "occurred_at") ?? string.Empty,
+            Anchor:        anchor);
+    }
+
+    internal static Incident ParseIncident(JsonElement raw)
+    {
+        var firedPolicies = new List<IReadOnlyDictionary<string, object?>>();
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("fired_policies", out var fp)
+            && fp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in fp.EnumerateArray()) firedPolicies.Add(JsonObjectToDict(entry));
+        }
+
+        var remediations = new List<Remediation>();
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("remediations", out var rem)
+            && rem.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in rem.EnumerateArray()) remediations.Add(ParseRemediation(entry));
+        }
+
+        IReadOnlyDictionary<string, object?>? anchor = null;
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("anchor", out var anc)
+            && anc.ValueKind == JsonValueKind.Object)
+        {
+            anchor = JsonObjectToDict(anc);
+        }
+
+        return new Incident(
+            IncidentId:    OptString(raw, "incident_id") ?? string.Empty,
+            Status:        OptString(raw, "status") ?? string.Empty,
+            Kind:          OptString(raw, "kind") ?? string.Empty,
+            SubjectId:     OptString(raw, "subject_id") ?? string.Empty,
+            FrameId:       OptString(raw, "frame_id"),
+            OpenedAt:      OptString(raw, "opened_at") ?? string.Empty,
+            ClosedAt:      OptString(raw, "closed_at"),
+            Reason:        OptString(raw, "reason") ?? string.Empty,
+            FiredPolicies: firedPolicies,
+            Remediations:  remediations,
+            Anchor:        anchor,
+            Raw:           raw);
+    }
+
+    internal static IncidentPage ParseIncidentPage(JsonElement raw)
+    {
+        var items = new List<Incident>();
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("incidents", out var arr)
+            && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in arr.EnumerateArray()) items.Add(ParseIncident(entry));
+        }
+        return new IncidentPage(items, OptString(raw, "next_cursor"), raw);
     }
 
     internal static CaptureResult ParseCaptureResult(JsonElement raw)
