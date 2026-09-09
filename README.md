@@ -139,6 +139,103 @@ The verifier rejects (returns `false`) on a missing `t` field, a
 malformed timestamp, a stale timestamp outside the tolerance window,
 or a signature mismatch. It runs in constant time.
 
+## Human-in-the-loop approvals
+
+A circuit-breaker policy can fire with action `require_approval`, which
+**holds** the action instead of refusing it. `CheckAsync` then hands back a
+denial that names what it is waiting on:
+
+```csharp
+var g = await cx.CheckAsync(subjectId: "subject:dv:checkout-bot");
+
+if (g.AwaitingApproval)
+    ShowMyOwnApprovalScreen(g.PendingApprovalId);   // asked
+else if (!g.Allow)
+    return Refuse(g.Reason);                        // refused
+```
+
+That is the whole difference between a breaker and a human-in-the-loop
+control, and it is one field because you have to branch on it.
+
+### You render it. All of it.
+
+```csharp
+await foreach (var a in cx.IterApprovalsAsync(status: "pending"))
+{
+    Console.WriteLine(a.Tool);        // the held call, verbatim
+    Console.WriteLine(a.Reason);      // your operator's policy words
+    Console.WriteLine(a.ExpiresAt);   // decide before this
+}
+```
+
+Nothing in an `Approval` is display text we wrote. `Reason` and each
+`FiredPolicies` entry's name are the words your operator typed when they
+wrote the policy, and `Action` is the call your agent was about to make.
+There is no message for your end user, no copy of ours, and no branding —
+because a sentence we wrote would read identically in every customer's
+product, which is the thing this is designed to avoid.
+
+### A decision records which human made it
+
+```csharp
+await cx.ApproveApprovalAsync(
+    approvalId: "apr_7f3c9a1b",
+    actorId:    "acct_4471",           // your identifier, not ours
+    actorLabel: "Dana R.",
+    reason:     "verified the order by phone");
+```
+
+`actorId` is required, never defaulted, and never derived from the API
+key — the key identifies your integration, and an approval whose actor is
+the integration that requested it has recorded nobody. We resolve it
+against no directory, so your users never need an account here. A blank
+one throws `DMZAgentValidationException` before any request goes out.
+
+Two operators who click at the same moment produce one decision and one
+`DMZAgentConflictException`; the body carries the status the approval had
+already reached. That is not a retry — the call did not fail, it lost.
+
+**An approval that nobody answers declines.** `OnExpiry` is always
+`"decline"` and there is no setting that changes it: an approval that
+becomes an allow because nobody looked at it is not a human-in-the-loop
+control, it is a delay with extra steps.
+
+## The incident and remediation ledger
+
+`Anchor` has been on `CheckResult` for several releases, pointing into a
+ledger nothing could open. Now it opens:
+
+```csharp
+var g = await cx.CheckAsync(subjectId: "subject:dv:checkout-bot");
+var recorded = g.Anchor;      // { ledger_index: 40197, hash: "b1c4…" }
+
+await foreach (var inc in cx.IterIncidentsAsync(
+    status: "open", since: "2026-09-01T00:00:00Z"))
+{
+    // inc.Anchor equal to `recorded` is the entry your check was told about
+}
+```
+
+Every breaker that opened, every approval decided, every remediation that
+ran — newest ledger entry first, in the order the ledger recorded them
+rather than by timestamp, because two entries written in the same second
+still have an order.
+
+The ledger is **append-only**. There is no `CloseIncidentAsync` and no
+method that edits an entry: an incident reaches `remediated` because a
+remediation was appended to it, and `Status` is a fold over what has been
+appended. An incident with no remediations is the normal shape of
+something nobody has answered yet.
+
+### Paging
+
+`ListApprovalsAsync` and `GetIncidentsAsync` return one page and do not
+follow `NextCursor`. You asked for 25 and you get 25 — a method that
+quietly walked every page would turn one bounded request into an unbounded
+one against a record that only grows. `IterApprovalsAsync` and
+`IterIncidentsAsync` are `IAsyncEnumerable<T>`: breaking out of the
+`await foreach` means the next page is never requested.
+
 ## Exception hierarchy
 
 | Status / situation                                  | Type                              |

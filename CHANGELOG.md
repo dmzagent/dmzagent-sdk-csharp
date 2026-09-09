@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-09 (spec 0.10.0)
+
+### Added
+- **Human-in-the-loop approvals you render yourself.**
+  `ListApprovalsAsync`, `IterApprovalsAsync`, `DecideApprovalAsync`, and
+  the `ApproveApprovalAsync` / `DeclineApprovalAsync` wrappers.
+
+  An `Approval` holds nothing we wrote for your users: `Reason` and each
+  `FiredPolicies` entry's name are your operator's own policy words, and
+  `Action` is the call your agent was about to make, verbatim.
+
+  `actorId` is required on every decision and is never defaulted or
+  derived from the API key. A decision without one throws
+  `DMZAgentValidationException` before any request is made.
+
+- **`CheckResult.PendingApprovalId` and `.AwaitingApproval`.** The
+  difference between being refused and being asked. `Allow` is still
+  `false` in both cases, deliberately: code that reads `Allow` alone keeps
+  refusing, so nothing written before this release starts allowing what it
+  used to deny.
+
+- **The incident and remediation ledger is readable** —
+  `GetIncidentsAsync` and `IterIncidentsAsync`, returning `Incident` with
+  its `Remediations`.
+
+  `Anchor` has been on `CheckResult` for several releases and pointed into
+  a ledger nothing could open. Record it at check time, find that
+  `ledger_index` here, compare hashes.
+
+### Changed
+- **`DMZAgentConflictException` also means a settled approval.** A second
+  decision on an approval someone already decided, or one past its
+  deadline, is a 409. Same type as the idempotency conflict for the same
+  reason: the call did not fail, it lost. The body's `status` says which
+  of the two it was, and the message no longer asserts "Idempotency-Key"
+  on paths where that is not the cause.
+
+### Notes
+- **Neither list method follows a cursor on its own.** The `Iter*` methods
+  are `IAsyncEnumerable<T>`; breaking out of the `await foreach` means the
+  next page is never requested.
+- **There is no `CloseIncidentAsync`.** The ledger is append-only and has
+  no endpoint for one.
+- **Expiry declines, and cannot be configured otherwise.** `OnExpiry`
+  reads `"decline"` even if a server sends something else.
+- The contract runner now dispatches the three new corpus methods and
+  pins **verb and query string** on read vectors: asserting only the body
+  would let a GET that dropped every filter pass, since a GET has no body
+  to be wrong about.
+
 ### Added
 - **Circuit-breaker state cache** (spec §4.4). `CheckAsync()` is a
   network round trip in front of a sensitive action; `cbCacheTtl` lets a
