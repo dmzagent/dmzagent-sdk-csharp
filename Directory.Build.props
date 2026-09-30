@@ -27,7 +27,7 @@
       still targets spec 0.5.0. publish.yml must compare the release tag
       against SdkVersion (not DMZAgentSpecVersion).
     -->
-    <SdkVersion>0.7.0</SdkVersion>
+    <SdkVersion>0.10.0</SdkVersion>
     <Version>$(SdkVersion)</Version>
     <PackageVersion>$(SdkVersion)</PackageVersion>
 
