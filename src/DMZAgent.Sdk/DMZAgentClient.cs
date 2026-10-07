@@ -1049,7 +1049,7 @@ public sealed class DMZAgentClient : IDisposable
     /// <para>Does not follow <c>NextCursor</c> — see
     /// <see cref="IterBehaviorsAsync"/>.</para>
     /// </remarks>
-    /// <param name="subjectId">The subject whose record to read. <c>.</c> and <c>..</c> throw <see cref="ArgumentException"/>.</param>
+    /// <param name="subjectId">The subject whose record to read. <c>.</c> and <c>..</c> throw <see cref="DMZAgentValidationException"/>.</param>
     /// <param name="polarity"><c>positive</c> | <c>negative</c> | <c>all</c>. Unset is the server's <c>all</c>.</param>
     /// <param name="interactionId">Restrict to one session.</param>
     /// <param name="since">ISO-8601; at or after.</param>
@@ -1117,7 +1117,6 @@ public sealed class DMZAgentClient : IDisposable
     /// <see cref="ListApprovalsAsync"/>. Approved runs; anything else is
     /// <c>block</c>.
     /// </summary>
-    /// <exception cref="ArgumentException">For an id of <c>.</c> or <c>..</c>.</exception>
     /// <exception cref="DMZAgentException">
     /// On an unknown id: a <c>404</c> is the base type, deliberately — the
     /// spec defers a dedicated not-found type rather than change the
@@ -1146,8 +1145,9 @@ public sealed class DMZAgentClient : IDisposable
     /// Subject ids are colon-delimited (Appendix A), so the path carries the
     /// id the caller wrote — which is also the path the corpus pins.
     /// </remarks>
-    /// <exception cref="ArgumentException">
-    /// For <c>.</c> or <c>..</c>, which no encoding can send as a segment:
+    /// <exception cref="DMZAgentValidationException">
+    /// For <c>.</c> or <c>..</c>, naming the parameter, like every other
+    /// local check. No encoding can send either as a segment:
     /// the URI layer resolves them away, and the request would reach a
     /// different resource than the one named — <c>/v1/approvals/.</c> is
     /// the approvals list.
@@ -1156,8 +1156,8 @@ public sealed class DMZAgentClient : IDisposable
     {
         if (value is "." or "..")
         {
-            throw new ArgumentException(
-                $"{paramName} '{value}' cannot be sent as a path segment", paramName);
+            throw new DMZAgentValidationException(
+                $"{paramName} '{value}' cannot be sent as a path segment");
         }
         return Uri.EscapeDataString(value)
             .Replace("%3A", ":", StringComparison.Ordinal)

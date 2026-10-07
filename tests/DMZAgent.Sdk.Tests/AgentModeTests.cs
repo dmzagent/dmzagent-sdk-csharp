@@ -712,8 +712,10 @@ public sealed class AgentModeTests
         var list = async () => await cx.ListBehaviorsAsync(id);
         var iter = async () => { await foreach (var _ in cx.IterBehaviorsAsync(id)) { } };
 
-        (await list.Should().ThrowAsync<ArgumentException>()).Which.ParamName.Should().Be("subjectId");
-        await iter.Should().ThrowAsync<ArgumentException>();
+        // The SDK's local-check error, so a caller catching DMZAgentException
+        // sees it, naming the parameter as this binding spells it.
+        (await list.Should().ThrowAsync<DMZAgentValidationException>()).WithMessage("*subjectId*");
+        (await iter.Should().ThrowAsync<DMZAgentValidationException>()).WithMessage("*subjectId*");
         stub.Calls.Should().Be(0);
     }
 
@@ -889,7 +891,7 @@ public sealed class AgentModeTests
 
         var act = async () => await cx.GetApprovalAsync(id);
 
-        (await act.Should().ThrowAsync<ArgumentException>()).Which.ParamName.Should().Be("approvalId");
+        (await act.Should().ThrowAsync<DMZAgentValidationException>()).WithMessage("*approvalId*");
         stub.Calls.Should().Be(0);
     }
 

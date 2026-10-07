@@ -353,7 +353,7 @@ await foreach (var b in cx.IterBehaviorsAsync(
 
 A subject id travels as one path segment, with `:` and `@` as written
 and every other reserved character encoded. An id of `.` or `..` cannot
-be a segment and throws `ArgumentException` before any request (so does
+be a segment and throws `DMZAgentValidationException` before any request (so does
 `GetApprovalAsync` for such an id).
 
 `Strength` is what the subject's soul holds for that tag now, and it

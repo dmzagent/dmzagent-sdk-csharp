@@ -58,7 +58,7 @@
 - A subject id in a path is one RFC 3986 segment: `:` and `@` as written
   (`/v1/subjects/subject:dv:agent-a/behaviors`, the path the corpus
   pins), every other reserved character encoded, so `/` cannot split it.
-  An id of `.` or `..` throws `ArgumentException` before any request,
+  An id of `.` or `..` throws `DMZAgentValidationException` before any request,
   in `ListBehaviorsAsync`, `IterBehaviorsAsync` and `GetApprovalAsync`,
   because the URI layer would resolve it to a different resource.
 
