@@ -3,7 +3,7 @@
 Official .NET client for the [DMZAgent](https://spec.dmzagent.com)
 agent-stream and circuit-breaker APIs.
 
-This package implements **spec version 0.9.0** — same constructor
+This package implements **spec version 0.11.0** — same constructor
 shape, same methods, same return types, same error hierarchy, same wire
 protocol as the Python, TypeScript, and Java SDKs. The naming follows
 the C# convention map in §8 of the spec.
@@ -129,7 +129,7 @@ using DMZAgent.Sdk.Webhook;
 
 var ok = WebhookSignature.Verify(
     payload:          rawRequestBody,
-    signatureHeader:  Request.Headers["DMZAgent-Signature"]!,
+    signatureHeader:  Request.Headers["X-DMZAgent-Signature"]!,
     secret:           "whsec_...",
     toleranceSeconds: 300);
 if (!ok) return Unauthorized();
@@ -137,7 +137,46 @@ if (!ok) return Unauthorized();
 
 The verifier rejects (returns `false`) on a missing `t` field, a
 malformed timestamp, a stale timestamp outside the tolerance window,
-or a signature mismatch. It runs in constant time.
+or a signature mismatch. It runs in constant time. It takes the header's
+value, so it is unaffected by the retired `X-Concordex-Signature` name,
+which carries the same value during its deprecation window.
+
+### What a delivery carries
+
+The SDK verifies deliveries; it does not model them. Each POST is one
+JSON object:
+
+```json
+{
+  "api_version":  "2026-05-30",
+  "kind":         "approval.requested",
+  "workspace_id": "ws_xxx",
+  "title":        "",
+  "body":         "",
+  "link":         null,
+  "data":         { },
+  "delivered_at": "2026-06-10T12:00:00.000Z"
+}
+```
+
+`kind` is also sent as the `X-DMZAgent-Event` header, and `data` is the
+event's object: an `Approval` for `approval.requested` and
+`approval.decided`, an `Incident` for `incident.opened` and
+`incident.remediated`, a `Behavior` (as `ListBehaviorsAsync` reads it)
+for `behavior.observed`, and the review and outcome shapes for
+`review.*` and `outcome.completed`. `title` and `body` are empty and
+`link` is null for all of these: you render them in your own words.
+
+`X-DMZAgent-Delivery` is the same on every retry of one delivery, so
+deduplicate on it. Answer a `kind` you do not know with a 2xx and ignore
+it: a non-2xx is retried, and enough failures disable the subscription.
+
+**A missed webhook must not become an approval.** Delivery is
+at-least-once and not guaranteed, and an approval's `ExpiresAt` runs
+regardless. Expiry declines, so an approval you only ever learned about
+by webhook fails safe if the webhook is lost — but invisibly. Read
+`ListApprovalsAsync` (or `GetApprovalAsync` for one you are waiting on)
+rather than relying on deliveries alone.
 
 ## Human-in-the-loop approvals
 
@@ -229,12 +268,87 @@ something nobody has answered yet.
 
 ### Paging
 
-`ListApprovalsAsync` and `GetIncidentsAsync` return one page and do not
-follow `NextCursor`. You asked for 25 and you get 25 — a method that
+`ListApprovalsAsync`, `GetIncidentsAsync` and `ListBehaviorsAsync` return
+one page and do not follow `NextCursor`. You asked for 25 and you get 25 — a method that
 quietly walked every page would turn one bounded request into an unbounded
-one against a record that only grows. `IterApprovalsAsync` and
-`IterIncidentsAsync` are `IAsyncEnumerable<T>`: breaking out of the
+one against a record that only grows. `IterApprovalsAsync`,
+`IterIncidentsAsync` and `IterBehaviorsAsync` are `IAsyncEnumerable<T>`: breaking out of the
 `await foreach` means the next page is never requested.
+
+## Agent mode
+
+An agent session is an interaction whose subject acts on its own: it calls
+tools, and something may let each call run or refuse it. Report each step
+**before** the call runs, and run it only when the answer says so:
+
+```csharp
+var s = cx.AgentSession(agentSubjectId: "subject:dv:agent-a", interactionId: "sess_4b1e");
+
+await s.IntentAsync("Add a trace id to every request.",
+    paths: new[] { "src/obs/" }, tools: new[] { "Edit", "Bash" });
+
+var step = await s.CallAsync("call_7", "Bash",
+    new Dictionary<string, object?> { ["command"] = "git push origin HEAD" },
+    idempotencyKey: "sess_4b1e/call_7");
+
+if (step.Runs)
+{
+    var output = RunTool();
+    await s.ResultAsync("call_7", "Bash", "ok", result: output);
+}
+else
+{
+    // Every call that did not run is reported, whoever refused it:
+    // "governor" (this answer), "harness" (your rules) or "host".
+    await s.RefusedAsync("call_7", "Bash", refusedBy: "governor", reason: step.Reason);
+}
+```
+
+`StepResult.Runs` is the one question a harness asks, with one answer:
+`true` exactly for `proceed` and `warn`. `hold`, `block` and `shutdown`
+are `false`, and so is **any directive this build does not know** — an
+unknown word from the governor reads as `block`, and `Directive` keeps the
+raw string so you can see what was said. A step that cannot be sent, or
+whose answer carries no readable directive, throws; there is no result
+that means "no answer".
+
+On `hold`, `ApprovalId` names the approval to wait on. Read it with
+`GetApprovalAsync`: approved runs, anything else is `block`. On
+`shutdown`, every later step in the session is answered `shutdown` too.
+
+`AgentStepAsync` is the same call without the handle, taking every field
+of the step. It refuses a malformed step before sending it: an unknown
+`phase`; `callId` or `tool` missing on a `call` or `result`; `status`
+missing on a `result`; `refusedBy` missing when `status` is `refused`,
+or present when it is not; `intent` missing on an `intent` step.
+
+The handle holds its two ids and nothing else. It does not remember
+refusals and does not infer `attemptOf`: when you know a call retries an
+earlier one, say so with `attemptOf`. Pass an `idempotencyKey` on `call`
+steps you might retry, so one call is not counted as two attempts; the
+SDK never generates one.
+
+### The conduct record
+
+Every answer lists the behaviors observed in the session so far. Each has
+a `Tag` — the installed canon's own name for it, which the SDK never maps
+or renames — a `Polarity` (`positive` or `negative`, or the server's raw
+word), a `Strength` from 0 to 1, the `Source` that observed it, and the
+frames that are its `Evidence`. Behaviors found by reasoning can arrive
+after the step that caused them (`Settled` is `false` until then); read
+them back from the subject's record:
+
+```csharp
+await foreach (var b in cx.IterBehaviorsAsync(
+    "subject:dv:agent-a", polarity: "negative", interactionId: "sess_4b1e"))
+{
+    Console.WriteLine($"{b.Tag} {b.Strength} {string.Join(",", b.Calls)}");
+}
+```
+
+`Strength` is what the subject's soul holds for that tag now, and it
+falls as the soul lets the tag go. There is no method that removes or
+amends a behavior: the record is corrected by correcting the soul.
 
 ## Exception hierarchy
 
@@ -244,7 +358,11 @@ one against a record that only grows. `IterApprovalsAsync` and
 | 400 / client-side argument validation               | `DMZAgentValidationException`    |
 | 401                                                 | `DMZAgentAuthException`          |
 | 403                                                 | `DMZAgentPermissionException`    |
-| 5xx, timeout, network failure                       | `DMZAgentServerException`        |
+| 409 — key in flight, or approval already settled    | `DMZAgentConflictException`      |
+| 422                                                 | `DMZAgentValidationException`    |
+| 429                                                 | `DMZAgentRateLimitException`     |
+| 5xx, timeout, network failure, unreadable step answer | `DMZAgentServerException`      |
+| any other status, including `GetApprovalAsync` 404  | `DMZAgentException`              |
 | `Guard(..., raiseOnOpen: true)` → blocked subject   | `CircuitBreakerOpenException`     |
 
 Every exception exposes `StatusCode` and `Body` (the parsed JSON
@@ -253,7 +371,8 @@ response or raw text). `CircuitBreakerOpenException` adds `Reason`,
 
 ## Resource lifecycle
 
-`DMZAgentClient` and `Conversation` both implement `IDisposable`.
+`DMZAgentClient`, `Conversation` and `AgentSession` implement
+`IDisposable` (the session's is a no-op: it owns nothing).
 Always wrap them in `using` — or call `.Close()` explicitly. Closing
 the client releases the underlying HTTP transport; calling close
 multiple times is a no-op.
@@ -318,7 +437,7 @@ a `RetryAfter` worth acting on.
 ## Spec conformance
 
 This SDK passes the contract-test corpus pinned at
-`dmzagent-sdk-spec@v0.9.0` — the value of `<DMZAgentSpecVersion>` in
+`dmzagent-sdk-spec@v0.11.0` — the value of `<DMZAgentSpecVersion>` in
 `Directory.Build.props`, which also generates the `SpecVersion` constant
 and the default User-Agent, so the pin and the constant cannot drift.
 The conformance run lives in `.github/workflows/spec-conformance.yml`.

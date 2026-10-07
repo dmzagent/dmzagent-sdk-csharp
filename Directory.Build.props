@@ -19,15 +19,20 @@
     anywhere in this file makes VERSION multi-line and breaks them again.
   -->
   <PropertyGroup>
-    <DMZAgentSpecVersion>0.10.0</DMZAgentSpecVersion>
+    <DMZAgentSpecVersion>0.11.0</DMZAgentSpecVersion>
     <!--
       The SDK package version. Decoupled from DMZAgentSpecVersion as of
       v0.6.0 — additive Concordia MCP client surface (#221 / MCP-1.5b)
       ships in the same package alongside the agent-stream surface that
       still targets spec 0.5.0. publish.yml must compare the release tag
       against SdkVersion (not DMZAgentSpecVersion).
+
+      Re-aligned at 0.10.0: promote.yml dispatches one version to every
+      SDK, so the package now carries the number of the spec it
+      implements. The two properties stay separate so a package-only fix
+      can still ship, but a spec bump moves both.
     -->
-    <SdkVersion>0.10.0</SdkVersion>
+    <SdkVersion>0.11.0</SdkVersion>
     <Version>$(SdkVersion)</Version>
     <PackageVersion>$(SdkVersion)</PackageVersion>
 

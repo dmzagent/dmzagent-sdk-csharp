@@ -40,3 +40,55 @@ public static class EventKinds
         "chat", "sensor", "lead", "ticket", "journey",
     };
 }
+
+/// <summary>
+/// The three phases of an agent-mode step (sdk-spec.md §1.9, §8.6).
+///
+/// <para>Not event kinds: a step goes to its own endpoint
+/// (<c>POST /v1/agent-stream/step</c>), and <see cref="EventKinds.All"/>
+/// is unchanged by agent mode.</para>
+/// </summary>
+public static class StepPhases
+{
+    public const string Intent = "intent";
+    public const string Call   = "call";
+    public const string Result = "result";
+
+    /// <summary>
+    /// Every phase, in spec order. <see cref="DMZAgentClient.AgentStepAsync"/>
+    /// refuses anything else before the request leaves the process.
+    /// </summary>
+    public static IReadOnlyList<string> All { get; } = new[] { Intent, Call, Result };
+}
+
+/// <summary>
+/// The five directives a step can be answered with (sdk-spec.md §1.9, §8.6).
+///
+/// <para>The list is what this build knows, not what a server may send:
+/// a server can add a directive (Appendix B), and
+/// <see cref="StepResult.Directive"/> then carries the raw word while
+/// <see cref="StepResult.Runs"/> reads it as <see cref="Block"/>.</para>
+/// </summary>
+public static class Directives
+{
+    public const string Proceed  = "proceed";
+    public const string Warn     = "warn";
+    public const string Hold     = "hold";
+    public const string Block    = "block";
+    public const string Shutdown = "shutdown";
+
+    /// <summary>Every directive, in spec order.</summary>
+    public static IReadOnlyList<string> All { get; } = new[] { Proceed, Warn, Hold, Block, Shutdown };
+
+    /// <summary>
+    /// Whether a call answered with <paramref name="directive"/> may run:
+    /// <c>true</c> exactly for <see cref="Proceed"/> and <see cref="Warn"/>.
+    /// </summary>
+    /// <remarks>
+    /// Written as an allow-list on purpose. A deny-list of the three that
+    /// stop a call would let a word this build has never seen through, and
+    /// an unknown word from the governor is not a yes (§1.9).
+    /// </remarks>
+    public static bool Runs(string? directive)
+        => directive is Proceed or Warn;
+}

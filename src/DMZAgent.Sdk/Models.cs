@@ -316,3 +316,110 @@ public sealed record IncidentPage(
 {
     public int Count => Incidents.Count;
 }
+
+// ---------------------------------------------------------------------------
+// Agent mode: a session governed one step at a time, and the conduct it
+// shows (spec §1.9, §2.11–§2.13, §7.16–§7.18, 0.11.0)
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// One behavior DMZAgent observed in an agent session (spec §7.17).
+///
+/// <para><see cref="Tag"/> is the installed canon's own name for it, in the
+/// words of whoever wrote the canon. The SDK does not map, rename or
+/// describe it. <see cref="Polarity"/> is <c>positive</c> or
+/// <c>negative</c>, or the server's raw word if it sends one this build
+/// does not know.</para>
+///
+/// <para>The fields from <see cref="BehaviorId"/> on are present when the
+/// behavior was read from a subject's conduct record
+/// (<c>DMZAgentClient.ListBehaviorsAsync</c>) and are <c>null</c> on the
+/// behaviors a <see cref="StepResult"/> carries.</para>
+///
+/// <para>The record has no method that removes or amends a behavior. It is
+/// corrected by correcting the subject's soul, never by editing an entry
+/// (§2.12).</para>
+/// </summary>
+public sealed record Behavior(
+    [property: JsonPropertyName("tag")]            string                                Tag,
+    [property: JsonPropertyName("polarity")]       string                                Polarity,
+    // 0–1: what the subject's soul holds for this tag now, not when it fired.
+    [property: JsonPropertyName("strength")]       double                                Strength,
+    // "logic" (evaluated at once) or "reasoning" (may settle after the step).
+    [property: JsonPropertyName("source")]         string                                Source,
+    // Frame ids.
+    [property: JsonPropertyName("evidence")]       IReadOnlyList<string>                 Evidence,
+    // Call ids the behavior concerns. MAY be empty.
+    [property: JsonPropertyName("calls")]          IReadOnlyList<string>                 Calls,
+    [property: JsonPropertyName("behavior_id")]    string?                               BehaviorId,
+    [property: JsonPropertyName("subject_id")]     string?                               SubjectId,
+    [property: JsonPropertyName("interaction_id")] string?                               InteractionId,
+    [property: JsonPropertyName("observed_at")]    string?                               ObservedAt,
+    // A logic pass and a reasoning pass anchor on different chains, so
+    // ledger_index here is evidence and not an order (§2.12).
+    [property: JsonPropertyName("anchor")]         IReadOnlyDictionary<string, object?>? Anchor,
+    [property: JsonIgnore]                         JsonElement                           Raw
+);
+
+/// <summary>
+/// The answer to one agent-mode step (spec §7.16).
+///
+/// <para>Branch on <see cref="Runs"/>. It is <c>true</c> exactly when
+/// <see cref="Directive"/> is <c>proceed</c> or <c>warn</c>, and
+/// <c>false</c> for <c>hold</c>, <c>block</c>, <c>shutdown</c> and any
+/// directive this build does not know: an unknown word from the governor is
+/// read as <c>block</c>, and <see cref="Directive"/> keeps the raw string so
+/// you can see what was said.</para>
+///
+/// <para>On <c>hold</c>, <see cref="ApprovalId"/> names the approval to wait
+/// on (<c>DMZAgentClient.GetApprovalAsync</c>): approved runs, anything else
+/// is <c>block</c>.</para>
+///
+/// <para>A step that could not be sent, or whose answer could not be read,
+/// throws rather than returning one of these. There is no
+/// <see cref="StepResult"/> that means "no answer".</para>
+/// </summary>
+public sealed record StepResult(
+    [property: JsonPropertyName("frame_id")]       string                                FrameId,
+    [property: JsonPropertyName("interaction_id")] string                                InteractionId,
+    [property: JsonPropertyName("directive")]      string                                Directive,
+    // "subject" | "interaction" | null — which scope gave the answer.
+    [property: JsonPropertyName("scope")]          string?                               Scope,
+    // The operator's policy words. MAY be empty.
+    [property: JsonPropertyName("reason")]         string                                Reason,
+    [property: JsonPropertyName("approval_id")]    string?                               ApprovalId,
+    // false while reasoning over this step is still running; behaviors it
+    // finds arrive later as behavior.observed webhooks and in the record.
+    [property: JsonPropertyName("settled")]        bool                                  Settled,
+    [property: JsonPropertyName("behaviors")]      IReadOnlyList<Behavior>               Behaviors,
+    [property: JsonPropertyName("anchor")]         IReadOnlyDictionary<string, object?>? Anchor,
+    [property: JsonPropertyName("livemode")]       bool?                                 Livemode,
+    [property: JsonIgnore]                         JsonElement                           Raw
+)
+{
+    /// <summary>
+    /// May the call run? <c>true</c> exactly for <c>proceed</c> and
+    /// <c>warn</c>. Derived from <see cref="Directive"/>, with no counterpart
+    /// on the wire, and computed rather than stored so that no copy of this
+    /// record can carry a <see cref="Runs"/> that disagrees with its
+    /// directive.
+    /// </summary>
+    [JsonIgnore]
+    public bool Runs => Directives.Runs(Directive);
+}
+
+/// <summary>
+/// One page of <c>DMZAgentClient.ListBehaviorsAsync</c> (spec §7.18).
+///
+/// <para>Newest <c>observed_at</c> first, as the server ordered it.
+/// <see cref="NextCursor"/> is <c>null</c> on the last page, and nothing
+/// here follows it for you — see <c>DMZAgentClient.IterBehaviorsAsync</c>.</para>
+/// </summary>
+public sealed record BehaviorPage(
+    [property: JsonPropertyName("behaviors")]   IReadOnlyList<Behavior> Behaviors,
+    [property: JsonPropertyName("next_cursor")] string?                 NextCursor,
+    [property: JsonIgnore]                      JsonElement             Raw
+)
+{
+    public int Count => Behaviors.Count;
+}

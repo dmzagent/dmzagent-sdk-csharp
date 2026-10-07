@@ -17,9 +17,9 @@ namespace DMZAgent.Sdk.Tests;
 
 /// <summary>
 /// Contract-conformance runner per spec contract-tests/runner-spec.md.
-/// Exercises all three corpora — golden envelopes (serialization
-/// parity), signature vectors (verifier parity), and error mapping
-/// (exception parity).
+/// Exercises golden envelopes (serialization parity), signature vectors
+/// (verifier parity), error mapping (exception parity), and step vectors
+/// (how an agent-mode step's answer is read).
 /// </summary>
 public class ContractTests
 {
@@ -66,7 +66,7 @@ public class ContractTests
         var       expected = fixture.GetProperty("expected_body");
         var       expPath  = fixture.GetProperty("expected_path").GetString()!;
 
-        var stub   = new StubHttpMessageHandler(HttpStatusCode.OK, "{}");
+        var stub   = new StubHttpMessageHandler(HttpStatusCode.OK, ResponseFor(method));
         using var cx = new DMZAgentClient(TestApiKey, handler: stub);
 
         await DispatchAsync(cx, method, args);
@@ -334,6 +334,174 @@ public class ContractTests
     };
 
     // ===================================================================== //
+    // Step vectors — how a step's answer is read (sdk-spec.md §1.9, §7.16)   //
+    // ===================================================================== //
+
+    public static IEnumerable<object[]> StepVectorFixtures() => StepVectors("fixtures");
+    public static IEnumerable<object[]> StepVectorFailures() => StepVectors("failures");
+
+    private static IEnumerable<object[]> StepVectors(string section)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(SpecPaths.StepVectors));
+        foreach (var fixture in doc.RootElement.GetProperty(section).EnumerateArray())
+        {
+            yield return new object[] { fixture.GetProperty("name").GetString()!, fixture.GetRawText() };
+        }
+    }
+
+    /// <summary>Serves the fixture's <c>responses</c> in order, repeating the last.</summary>
+    private static StubHttpMessageHandler ServeResponses(JsonElement fixture)
+    {
+        var responses = fixture.GetProperty("responses").EnumerateArray()
+            .Select(r => ((HttpStatusCode)r.GetProperty("status").GetInt32(),
+                          r.GetProperty("body").GetRawText()))
+            .ToList();
+        var served = 0;
+        return new StubHttpMessageHandler((_, _) =>
+        {
+            var (status, body) = responses[Math.Min(served++, responses.Count - 1)];
+            return StubHttpMessageHandler.MakeResponse(status, body);
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(StepVectorFixtures))]
+    public async Task StepVector_reads_the_answer(string name, string fixtureRaw)
+    {
+        using var doc     = JsonDocument.Parse(fixtureRaw);
+        var       fixture = doc.RootElement;
+        fixture.GetProperty("method").GetString().Should().Be("agent_step", $"fixture {name}");
+
+        var stub = ServeResponses(fixture);
+        using var cx = new DMZAgentClient(TestApiKey, handler: stub);
+
+        var result = await AgentStepFromArgsAsync(cx, fixture.GetProperty("args"));
+
+        var expReq = fixture.GetProperty("expected_request");
+        stub.LastRequest!.Method.Method.Should().Be(
+            expReq.GetProperty("method").GetString(), $"fixture {name}: verb");
+        stub.LastRequestPath.Should().Be(
+            expReq.GetProperty("path").GetString(), $"fixture {name}: path");
+
+        var expected = fixture.GetProperty("expected_result");
+        // runner-spec.md: runs MUST be asserted on every vector. A vector
+        // that left it out would let the one field a harness branches on
+        // go unchecked, so its absence is a failure here, not a skip.
+        expected.TryGetProperty("runs", out _).Should().BeTrue(
+            $"fixture {name}: every step vector must pin runs");
+
+        foreach (var prop in expected.EnumerateObject())
+        {
+            if (prop.Name == "behaviors")
+            {
+                var want = prop.Value.EnumerateArray().ToList();
+                result.Behaviors.Should().HaveCountGreaterThanOrEqualTo(want.Count, $"fixture {name}: behaviors");
+                for (var i = 0; i < want.Count; i++)
+                {
+                    foreach (var bp in want[i].EnumerateObject())
+                    {
+                        AssertField(BehaviorField(result.Behaviors[i], bp.Name), bp.Value,
+                            $"fixture {name}: behaviors[{i}].{bp.Name}");
+                    }
+                }
+                continue;
+            }
+            AssertField(StepField(result, prop.Name), prop.Value, $"fixture {name}: {prop.Name}");
+        }
+
+        _output.WriteLine($"✓ step_vectors/{name}");
+    }
+
+    [Theory]
+    [MemberData(nameof(StepVectorFailures))]
+    public async Task StepVector_failure_raises_and_returns_nothing(string name, string fixtureRaw)
+    {
+        using var doc     = JsonDocument.Parse(fixtureRaw);
+        var       fixture = doc.RootElement;
+        var       expected = fixture.GetProperty("expected_exception").GetString()!;
+
+        var stub = ServeResponses(fixture);
+        using var cx = new DMZAgentClient(TestApiKey, handler: stub);
+
+        StepResult? returned = null;
+        var exc = await ((Func<Task>)(async () =>
+            returned = await AgentStepFromArgsAsync(cx, fixture.GetProperty("args"))))
+            .Should().ThrowAsync<DMZAgentException>();
+        MapCanonical(exc.Which).Should().Be(expected, $"fixture {name}");
+        returned.Should().BeNull($"fixture {name}: an unanswered step must not return a result");
+
+        _output.WriteLine($"✓ step_vectors/{name}");
+    }
+
+    /// <summary>A <see cref="StepResult"/> field by its canonical wire name (§8.4).</summary>
+    private static object? StepField(StepResult r, string canonical) => canonical switch
+    {
+        "frame_id"       => r.FrameId,
+        "interaction_id" => r.InteractionId,
+        "directive"      => r.Directive,
+        "scope"          => r.Scope,
+        "reason"         => r.Reason,
+        "approval_id"    => r.ApprovalId,
+        "settled"        => r.Settled,
+        "livemode"       => r.Livemode,
+        "runs"           => r.Runs,
+        _ => throw new InvalidOperationException($"runner: StepResult has no field '{canonical}'"),
+    };
+
+    /// <summary>A <see cref="Behavior"/> field by its canonical wire name (§8.4).</summary>
+    private static object? BehaviorField(Behavior b, string canonical) => canonical switch
+    {
+        "tag"            => b.Tag,
+        "polarity"       => b.Polarity,
+        "strength"       => b.Strength,
+        "source"         => b.Source,
+        "evidence"       => b.Evidence,
+        "calls"          => b.Calls,
+        "behavior_id"    => b.BehaviorId,
+        "subject_id"     => b.SubjectId,
+        "interaction_id" => b.InteractionId,
+        "observed_at"    => b.ObservedAt,
+        _ => throw new InvalidOperationException($"runner: Behavior has no field '{canonical}'"),
+    };
+
+    private static void AssertField(object? actual, JsonElement want, string because)
+    {
+        switch (want.ValueKind)
+        {
+            case JsonValueKind.Null:
+                actual.Should().BeNull(because);
+                break;
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                actual.Should().Be(want.GetBoolean(), because);
+                break;
+            case JsonValueKind.Number:
+                Convert.ToDouble(actual).Should().Be(want.GetDouble(), because);
+                break;
+            case JsonValueKind.String:
+                actual.Should().Be(want.GetString(), because);
+                break;
+            case JsonValueKind.Array:
+                ((IEnumerable<string>)actual!).Should().Equal(
+                    want.EnumerateArray().Select(e => e.GetString()!), because);
+                break;
+            default:
+                throw new InvalidOperationException($"runner: cannot compare {want.ValueKind} ({because})");
+        }
+    }
+
+    /// <summary>
+    /// The body the golden stub answers with. A step whose answer carries no
+    /// directive cannot be read and throws (§1.9), so the golden run serves a
+    /// readable one; every other method parses <c>{}</c>.
+    /// </summary>
+    private static string ResponseFor(string method) => method switch
+    {
+        "agent_step" => """{"frame_id":"fr_g","interaction_id":"sess_1","directive":"proceed","settled":true,"behaviors":[]}""",
+        _            => "{}",
+    };
+
+    // ===================================================================== //
     // Dispatch — turn a canonical method name + snake_case args into a     //
     // C# method call.                                                       //
     // ===================================================================== //
@@ -424,10 +592,53 @@ public class ContractTests
                     cursor:    OptString(args, "cursor"));
                 return;
 
+            // 0.11.0 — agent mode.
+            case "agent_step":
+                await AgentStepFromArgsAsync(cx, args);
+                return;
+
+            case "list_behaviors":
+                await cx.ListBehaviorsAsync(
+                    subjectId:     OptString(args, "subject_id")!,
+                    polarity:      OptString(args, "polarity"),
+                    interactionId: OptString(args, "interaction_id"),
+                    since:         OptString(args, "since"),
+                    until:         OptString(args, "until"),
+                    limit:         OptInt(args, "limit"),
+                    cursor:        OptString(args, "cursor"));
+                return;
+
+            case "get_approval":
+                await cx.GetApprovalAsync(OptString(args, "approval_id")!);
+                return;
+
             default:
                 throw new InvalidOperationException($"runner: unsupported method '{method}'");
         }
     }
+
+    /// <summary>
+    /// <c>agent_step(**args)</c>: every request field of §2.11, passed only
+    /// when the fixture names it, so a missing required field reaches the
+    /// SDK as missing and the local validation is what answers it.
+    /// </summary>
+    private static Task<StepResult> AgentStepFromArgsAsync(DMZAgentClient cx, JsonElement args)
+        => cx.AgentStepAsync(
+            agentSubjectId: OptString(args, "agent_subject_id")!,
+            interactionId:  OptString(args, "interaction_id")!,
+            phase:          OptString(args, "phase")!,
+            callId:         OptString(args, "call_id"),
+            tool:           OptString(args, "tool"),
+            args:           OptDict(args, "args"),
+            status:         OptString(args, "status"),
+            result:         OptObject(args, "result"),
+            refusedBy:      OptString(args, "refused_by"),
+            reason:         OptString(args, "reason"),
+            attemptOf:      OptString(args, "attempt_of"),
+            intent:         OptDict(args, "intent"),
+            occurredAt:     OptString(args, "occurred_at"),
+            metadata:       OptDict(args, "metadata"),
+            idempotencyKey: OptString(args, "idempotency_key"));
 
     private static string? OptString(JsonElement el, string name)
         => el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

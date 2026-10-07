@@ -5,7 +5,7 @@ using System.Text;
 namespace DMZAgent.Sdk.Webhook;
 
 /// <summary>
-/// HMAC-SHA256 verifier for DMZAgent outbound webhooks (sdk-spec.md §9).
+/// HMAC-SHA256 verifier for DMZAgent outbound webhooks (sdk-spec.md §10).
 ///
 /// <para>
 /// DMZAgent signs every outbound webhook with the subscription's
@@ -16,7 +16,7 @@ namespace DMZAgent.Sdk.Webhook;
 /// </code>
 ///
 /// <para>
-/// Per sdk-spec.md §9 the verifier MUST: parse the header, reject when
+/// Per sdk-spec.md §10 the verifier MUST: parse the header, reject when
 /// <c>t</c> is missing/non-numeric/older than tolerance, compute the
 /// expected HMAC, and constant-time compare. This implementation
 /// returns <c>false</c> on any failure rather than raising — symmetric
@@ -27,7 +27,7 @@ public static class WebhookSignature
 {
     /// <summary>Verify a signed payload.</summary>
     /// <param name="payload">Raw request body as a UTF-8 string.</param>
-    /// <param name="signatureHeader">Value of the <c>DMZAgent-Signature</c> header.</param>
+    /// <param name="signatureHeader">Value of the <c>X-DMZAgent-Signature</c> header (the retired <c>X-Concordex-Signature</c> carries the same value).</param>
     /// <param name="secret">The subscription secret (whsec_…).</param>
     /// <param name="toleranceSeconds">Maximum age of the <c>t</c> timestamp, in seconds. Default 300.</param>
     /// <param name="nowUnix">Override for the current Unix time, in seconds. Use for tests; default is system time.</param>

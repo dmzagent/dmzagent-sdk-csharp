@@ -16,6 +16,7 @@ internal static class SpecPaths
     public static string GoldenEnvelopes   => Path.Combine(ContractTestsDir, "golden-envelopes.json");
     public static string SignatureVectors  => Path.Combine(ContractTestsDir, "signature-vectors.json");
     public static string ErrorMapping      => Path.Combine(ContractTestsDir, "error-mapping.json");
+    public static string StepVectors       => Path.Combine(ContractTestsDir, "step-vectors.json");
     public static string VersionFile       => Path.Combine(SpecRoot, "VERSION");
 
     private static string ResolveSpecRoot()
