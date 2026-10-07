@@ -2,6 +2,79 @@
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-07 (spec 0.11.0)
+
+### Added
+- **Agent mode: a session governed one step at a time.**
+  `AgentStepAsync` reports one step (`intent`, `call` or `result`) to
+  `POST /v1/agent-stream/step` and returns a `StepResult` carrying the
+  directive for it. `AgentSession(agentSubjectId, interactionId)` is a
+  handle with `IntentAsync`, `CallAsync`, `ResultAsync` and
+  `RefusedAsync`; it holds its client and its two ids and nothing it
+  learned, so it never remembers a refusal or infers `attemptOf` for you.
+  It owns no resource and is not `IDisposable`.
+
+  Branch on `StepResult.Runs`. It is `true` exactly for `proceed` and
+  `warn`, and `false` for `hold`, `block`, `shutdown` and any directive
+  this build does not know: an unknown word from the governor reads as
+  `block`, and `Directive` keeps the raw string. A step that cannot be
+  sent, or whose answer carries no readable directive, throws
+  `DMZAgentServerException` instead of returning anything shaped like an
+  answer.
+
+  A malformed step is refused locally, with no round trip: an unknown
+  `phase`; `callId` or `tool` missing on `call`/`result`; `status` missing
+  on `result`; `refusedBy` missing when `status` is `refused`, or present
+  when it is not, on any phase; `intent` missing on `intent` or without
+  a string `text`; a blank `agentSubjectId` or `interactionId`.
+  `idempotencyKey` is accepted on every step method and never generated.
+  An unreadable 2xx answer throws with its status code. A missing
+  `settled` reads `false` and a missing `livemode` `null`.
+
+- **The conduct record is readable.** `ListBehaviorsAsync` and
+  `IterBehaviorsAsync` read `GET /v1/subjects/{subject_id}/behaviors`,
+  returning `BehaviorPage` and `Behavior`. A behavior's `Tag` is the
+  installed canon's own word and is not mapped or renamed; an unknown
+  `Polarity` is kept as sent. `Behavior` has no `Raw` (spec §7.17);
+  `StepResult` and `BehaviorPage` carry the server JSON. There is no
+  method that removes or amends a behavior: the record is corrected by
+  correcting the soul.
+
+- **`GetApprovalAsync(approvalId)`**, for a caller holding a `hold` to
+  learn whether it was approved without walking `ListApprovalsAsync`. An
+  unknown id is a `404` and throws the base `DMZAgentException`, as the
+  spec maps it; there is no not-found subtype yet.
+
+- **`StepPhases` and `Directives`** constants (`.All` plus one constant
+  per value), beside the unchanged `EventKinds`.
+
+### Changed
+- Spec pin and package version are both **0.11.0**.
+- **The breaker has a `hold` state** (spec §2.2): a subject waiting on a
+  person, with `Allow` false and `PendingApprovalId` naming the approval.
+  Policy `action` values are `allow`, `review`, `block` and
+  `require_approval`; the SDK passes them through unchecked.
+- **`CheckAsync` no longer fails open.** A state this build does not know
+  now reads `Allow == false` whatever the response's `allow` said, and a
+  response without `allow` derives it from the state (`closed` and
+  `half_open` allow) instead of defaulting to `true`.
+- The contract runner dispatches `agent_step`, `list_behaviors` and
+  `get_approval`, and runs `step-vectors.json`, asserting `runs` on every
+  vector. Before this release the golden-envelope and validation fixtures
+  for those three methods, already on the spec's main branch, failed in
+  the runner as unsupported methods.
+- A subject id in a path is one RFC 3986 segment: `:` and `@` as written
+  (`/v1/subjects/subject:dv:agent-a/behaviors`, the path the corpus
+  pins), every other reserved character encoded, so `/` cannot split it.
+  An id of `.` or `..` throws `DMZAgentValidationException` before any request,
+  in `ListBehaviorsAsync`, `IterBehaviorsAsync` and `GetApprovalAsync`,
+  because the URI layer would resolve it to a different resource.
+
+### Docs
+- The README's webhook section names the header the server sends,
+  `X-DMZAgent-Signature`, rather than `DMZAgent-Signature`, and describes
+  the delivery envelope of spec §9.1. Verification is unchanged.
+
 ## [0.10.0] — 2026-09-30 (spec 0.10.0)
 
 ### Changed

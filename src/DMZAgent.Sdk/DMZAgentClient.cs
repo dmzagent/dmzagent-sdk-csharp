@@ -879,6 +879,291 @@ public sealed class DMZAgentClient : IDisposable
     // convenience method that read as closing one would describe a ledger
     // this is not (spec §5.21).
 
+    // =================================================================== //
+    // Agent mode (spec §1.9, §2.11–§2.13, §5.22–§5.25)                    //
+    // =================================================================== //
+
+    /// <summary>
+    /// Report one step of an agent session and receive its directive
+    /// (sdk-spec.md §5.22, §2.11).
+    /// </summary>
+    /// <remarks>
+    /// <para>Branch on <see cref="StepResult.Runs"/>: <c>true</c> exactly for
+    /// <c>proceed</c> and <c>warn</c>. A directive this build does not know
+    /// is read as <c>block</c>.</para>
+    /// <para>An unanswered step is not a yes. When the step cannot be sent
+    /// or its answer cannot be read this throws, and there is no result the
+    /// caller could mistake for permission.</para>
+    /// <para><paramref name="idempotencyKey"/> is recommended on a
+    /// <c>call</c> step, so a harness that retries one is not counted as
+    /// attempting it twice. The SDK never generates one (§1.8).</para>
+    /// </remarks>
+    /// <exception cref="DMZAgentValidationException">
+    /// Locally, with no round trip, when the step is malformed:
+    /// <paramref name="phase"/> is not one of <see cref="StepPhases.All"/>;
+    /// <paramref name="callId"/> or <paramref name="tool"/> is missing on a
+    /// <c>call</c> or <c>result</c> step; <paramref name="status"/> is missing
+    /// on a <c>result</c> step; <paramref name="refusedBy"/> is missing when
+    /// <paramref name="status"/> is <c>refused</c>, or present when it is not,
+    /// on any phase; <paramref name="intent"/> is missing on an <c>intent</c>
+    /// step, or carries no string <c>text</c>; either id is blank. A
+    /// malformed step is a mistake in the harness, and the failure belongs
+    /// where the mistake is.
+    /// </exception>
+    public async Task<StepResult> AgentStepAsync(
+        string                                agentSubjectId,
+        string                                interactionId,
+        string                                phase,
+        string?                               callId            = null,
+        string?                               tool              = null,
+        IReadOnlyDictionary<string, object?>? args              = null,
+        string?                               status            = null,
+        object?                               result            = null,
+        string?                               refusedBy         = null,
+        string?                               reason            = null,
+        string?                               attemptOf         = null,
+        IReadOnlyDictionary<string, object?>? intent            = null,
+        string?                               occurredAt        = null,
+        IReadOnlyDictionary<string, object?>? metadata          = null,
+        // Caller-generated (spec §1.8). Never invented here.
+        string?                               idempotencyKey    = null,
+        CancellationToken                     cancellationToken = default)
+    {
+        RequireStep(agentSubjectId, interactionId, phase, callId, tool, status, refusedBy, intent);
+
+        var body = new Dictionary<string, object?>
+        {
+            ["agent_subject_id"] = agentSubjectId,
+            ["interaction_id"]   = interactionId,
+            ["phase"]            = phase,
+        };
+        if (callId is not null)     body["call_id"]     = callId;
+        if (tool is not null)       body["tool"]        = tool;
+        if (args is not null)       body["args"]        = args;
+        if (status is not null)     body["status"]      = status;
+        if (result is not null)     body["result"]      = result;
+        if (refusedBy is not null)  body["refused_by"]  = refusedBy;
+        if (reason is not null)     body["reason"]      = reason;
+        if (attemptOf is not null)  body["attempt_of"]  = attemptOf;
+        if (intent is not null)     body["intent"]      = intent;
+        if (occurredAt is not null) body["occurred_at"] = occurredAt;
+        if (metadata is not null)   body["metadata"]    = metadata;
+
+        var (code, raw) = await PostJsonWithStatusAsync(
+            "/v1/agent-stream/step", body, idempotencyKey, cancellationToken).ConfigureAwait(false);
+        return ParseStepResult(raw, code);
+    }
+
+    /// <summary>
+    /// The local half of §5.22: refuse a malformed step before it is sent.
+    /// </summary>
+    /// <remarks>
+    /// Messages name parameters as this binding spells them
+    /// (<c>callId</c>, <c>refusedBy</c>), not by their wire keys.
+    /// </remarks>
+    private static void RequireStep(
+        string? agentSubjectId, string? interactionId, string? phase,
+        string? callId, string? tool, string? status, string? refusedBy,
+        IReadOnlyDictionary<string, object?>? intent)
+    {
+        if (string.IsNullOrEmpty(agentSubjectId))
+        {
+            throw new DMZAgentValidationException("agentSubjectId is required on every step");
+        }
+        if (string.IsNullOrEmpty(interactionId))
+        {
+            throw new DMZAgentValidationException(
+                "interactionId is required on every step: it names the session");
+        }
+        if (phase is null || !StepPhases.All.Contains(phase))
+        {
+            throw new DMZAgentValidationException(
+                $"phase must be one of [{string.Join(", ", StepPhases.All)}], got '{phase}'");
+        }
+        if (phase is StepPhases.Call or StepPhases.Result)
+        {
+            if (string.IsNullOrEmpty(callId))
+            {
+                throw new DMZAgentValidationException($"callId is required on a {phase} step");
+            }
+            if (string.IsNullOrEmpty(tool))
+            {
+                throw new DMZAgentValidationException($"tool is required on a {phase} step");
+            }
+        }
+        if (phase == StepPhases.Result && string.IsNullOrEmpty(status))
+        {
+            throw new DMZAgentValidationException("status is required on a result step");
+        }
+        // Exactly when: a refusal that does not say who refused cannot be
+        // told apart from the governor's own, and a refuser named on a call
+        // that ran describes something that did not happen.
+        if (status == "refused" && string.IsNullOrEmpty(refusedBy))
+        {
+            throw new DMZAgentValidationException(
+                "refusedBy is required when status is refused: governor, harness or host");
+        }
+        if (status != "refused" && refusedBy is not null)
+        {
+            throw new DMZAgentValidationException(
+                $"refusedBy is sent only when status is refused, got status '{status}'");
+        }
+        if (phase == StepPhases.Intent && intent is null)
+        {
+            throw new DMZAgentValidationException("intent is required on an intent step");
+        }
+        if (intent is not null && !(intent.TryGetValue("text", out var text) && text is string))
+        {
+            throw new DMZAgentValidationException(
+                "intent must carry a string text: what the agent says it will do");
+        }
+    }
+
+    /// <summary>
+    /// A handle bound to one agent session (sdk-spec.md §5.23). It holds only
+    /// the two ids; see <see cref="Sdk.AgentSession"/>.
+    /// </summary>
+    /// <exception cref="DMZAgentValidationException">When either id is blank.</exception>
+    public AgentSession AgentSession(string agentSubjectId, string interactionId)
+    {
+        if (string.IsNullOrEmpty(agentSubjectId))
+        {
+            throw new DMZAgentValidationException("agentSubjectId is required");
+        }
+        if (string.IsNullOrEmpty(interactionId))
+        {
+            throw new DMZAgentValidationException("interactionId is required: it names the session");
+        }
+        return new AgentSession(this, agentSubjectId, interactionId);
+    }
+
+    /// <summary>
+    /// One page of a subject's conduct record (sdk-spec.md §5.24, §2.12).
+    /// </summary>
+    /// <remarks>
+    /// <para>Every behavior observed, positive and negative, across the
+    /// subject's sessions, newest first. A tag the operator has accepted as
+    /// expected for the subject is not listed. There is no method that
+    /// removes or amends a behavior: the record is corrected by correcting
+    /// the soul.</para>
+    /// <para>Does not follow <c>NextCursor</c> — see
+    /// <see cref="IterBehaviorsAsync"/>.</para>
+    /// </remarks>
+    /// <param name="subjectId">The subject whose record to read. <c>.</c> and <c>..</c> throw <see cref="DMZAgentValidationException"/>.</param>
+    /// <param name="polarity"><c>positive</c> | <c>negative</c> | <c>all</c>. Unset is the server's <c>all</c>.</param>
+    /// <param name="interactionId">Restrict to one session.</param>
+    /// <param name="since">ISO-8601; at or after.</param>
+    /// <param name="until">ISO-8601; strictly before.</param>
+    /// <param name="limit">1–100. Defaults to the server's 25.</param>
+    /// <param name="cursor">From a previous page's <c>NextCursor</c>.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    public async Task<BehaviorPage> ListBehaviorsAsync(
+        string            subjectId,
+        string?           polarity          = null,
+        string?           interactionId     = null,
+        string?           since             = null,
+        string?           until             = null,
+        int?              limit             = null,
+        string?           cursor            = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(subjectId))
+        {
+            throw new DMZAgentValidationException("subjectId is required");
+        }
+
+        var query = new List<KeyValuePair<string, string>>();
+        if (polarity is not null)      query.Add(new("polarity", polarity));
+        if (interactionId is not null) query.Add(new("interaction_id", interactionId));
+        if (since is not null)         query.Add(new("since", since));
+        if (until is not null)         query.Add(new("until", until));
+        if (limit is { } l)
+        {
+            RequirePageLimit(l);
+            query.Add(new("limit", l.ToString(CultureInfo.InvariantCulture)));
+        }
+        if (cursor is not null) query.Add(new("cursor", cursor));
+
+        var path = $"/v1/subjects/{PathSegment(subjectId, nameof(subjectId))}/behaviors";
+        var raw  = await GetJsonAsync(path + QueryString(query), cancellationToken).ConfigureAwait(false);
+        return ParseBehaviorPage(raw);
+    }
+
+    /// <summary>Lazily walk every page of <see cref="ListBehaviorsAsync"/>, on §5.17's terms.</summary>
+    public async IAsyncEnumerable<Behavior> IterBehaviorsAsync(
+        string  subjectId,
+        string? polarity      = null,
+        string? interactionId = null,
+        string? since         = null,
+        string? until         = null,
+        int?    limit         = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        string? cursor = null;
+        while (true)
+        {
+            var page = await ListBehaviorsAsync(
+                subjectId, polarity, interactionId, since, until, limit, cursor, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var b in page.Behaviors) yield return b;
+            if (string.IsNullOrEmpty(page.NextCursor)) yield break;
+            cursor = page.NextCursor;
+        }
+    }
+
+    /// <summary>
+    /// One approval, by id (sdk-spec.md §5.25, §2.13): how a caller holding
+    /// a <c>hold</c> directive learns whether it was approved without walking
+    /// <see cref="ListApprovalsAsync"/>. Approved runs; anything else is
+    /// <c>block</c>.
+    /// </summary>
+    /// <exception cref="DMZAgentException">
+    /// On an unknown id: a <c>404</c> is the base type, deliberately — the
+    /// spec defers a dedicated not-found type rather than change the
+    /// hierarchy (§2.13). Its <c>StatusCode</c> is 404.
+    /// </exception>
+    public async Task<Approval> GetApprovalAsync(
+        string            approvalId,
+        CancellationToken cancellationToken = default)
+    {
+        // An empty id would ask for "/v1/approvals/", which is the list.
+        if (string.IsNullOrEmpty(approvalId))
+        {
+            throw new DMZAgentValidationException("approvalId is required");
+        }
+        var path = $"/v1/approvals/{PathSegment(approvalId, nameof(approvalId))}";
+        var raw  = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false);
+        return ParseApproval(raw);
+    }
+
+    /// <summary>
+    /// Encode one path segment as RFC 3986 <c>pchar</c> (spec §2.12):
+    /// <c>:</c> and <c>@</c> as written, every other reserved character
+    /// percent-encoded, so <c>/</c> can never split the id into two segments.
+    /// </summary>
+    /// <remarks>
+    /// Subject ids are colon-delimited (Appendix A), so the path carries the
+    /// id the caller wrote — which is also the path the corpus pins.
+    /// </remarks>
+    /// <exception cref="DMZAgentValidationException">
+    /// For <c>.</c> or <c>..</c>, naming the parameter, like every other
+    /// local check. No encoding can send either as a segment:
+    /// the URI layer resolves them away, and the request would reach a
+    /// different resource than the one named — <c>/v1/approvals/.</c> is
+    /// the approvals list.
+    /// </exception>
+    private static string PathSegment(string value, string paramName)
+    {
+        if (value is "." or "..")
+        {
+            throw new DMZAgentValidationException(
+                $"{paramName} '{value}' cannot be sent as a path segment");
+        }
+        return Uri.EscapeDataString(value)
+            .Replace("%3A", ":", StringComparison.Ordinal)
+            .Replace("%40", "@", StringComparison.Ordinal);
+    }
+
     /// <summary>Reject a page size the server would reject, before the round trip.</summary>
     private static void RequirePageLimit(int limit)
     {
@@ -978,6 +1263,19 @@ public sealed class DMZAgentClient : IDisposable
         IReadOnlyDictionary<string, object?> body,
         string?                         idempotencyKey,
         CancellationToken               cancellationToken)
+        => (await PostJsonWithStatusAsync(path, body, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false)).Body;
+
+    /// <summary>
+    /// <see cref="PostJsonAsync(string, IReadOnlyDictionary{string, object?}, string?, CancellationToken)"/>,
+    /// keeping the 2xx status, for a caller that must report it when the
+    /// body it came with cannot be read (§1.9).
+    /// </summary>
+    internal async Task<(int Status, JsonElement Body)> PostJsonWithStatusAsync(
+        string                          path,
+        IReadOnlyDictionary<string, object?> body,
+        string?                         idempotencyKey,
+        CancellationToken               cancellationToken)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(DMZAgentClient));
 
@@ -1011,7 +1309,8 @@ public sealed class DMZAgentClient : IDisposable
 
         using (response)
         {
-            return await HandleResponseAsync(response, path, cancellationToken).ConfigureAwait(false);
+            var json = await HandleResponseAsync(response, path, cancellationToken).ConfigureAwait(false);
+            return ((int)response.StatusCode, json);
         }
     }
 
@@ -1171,10 +1470,21 @@ public sealed class DMZAgentClient : IDisposable
             Raw:            raw);
     }
 
+    /// <summary>The breaker states this build knows (spec §2.2).</summary>
+    private static readonly HashSet<string> KnownBreakerStates = new(StringComparer.Ordinal)
+    {
+        "closed", "half_open", "hold", "open",
+    };
+
     internal static CheckResult ParseCheckResult(JsonElement raw)
     {
         string state          = OptString(raw, "state") ?? "closed";
-        bool   allow          = OptBool(raw, "allow") ?? true;
+        // allow is read from the wire. Two things override it, both toward
+        // refusing: a state this build does not know denies (§2.2,
+        // Appendix B), and an absent allow is derived from the state rather
+        // than defaulted to true, so hold and open refuse even then.
+        bool   allow          = KnownBreakerStates.Contains(state)
+                                && (OptBool(raw, "allow") ?? state is "closed" or "half_open");
         bool   warning        = OptBool(raw, "warning") ?? false;
         string reason         = OptString(raw, "reason") ?? string.Empty;
         string checkedAt      = OptString(raw, "checked_at") ?? string.Empty;
@@ -1370,6 +1680,100 @@ public sealed class DMZAgentClient : IDisposable
             foreach (var entry in arr.EnumerateArray()) items.Add(ParseIncident(entry));
         }
         return new IncidentPage(items, OptString(raw, "next_cursor"), raw);
+    }
+
+    /// <summary>
+    /// Read a step's answer, or throw. Never returns a result that does not
+    /// carry the governor's word.
+    /// </summary>
+    /// <remarks>
+    /// A 2xx whose body is not an object, or carries no <c>directive</c>
+    /// string, is an answer that cannot be read (§1.9), and the caller must
+    /// not run the call. It is a <c>ServerError</c> carrying the response's
+    /// status: the fault is on the server's side of the wire, and a retry
+    /// under the same <c>Idempotency-Key</c> is safe. Returning a result
+    /// with an empty directive would
+    /// also read as <c>Runs == false</c>, but it would hand the caller a
+    /// value shaped like an answer, which is the thing §1.9 forbids.
+    /// </remarks>
+    internal static StepResult ParseStepResult(JsonElement raw, int statusCode)
+    {
+        if (raw.ValueKind != JsonValueKind.Object
+            || !raw.TryGetProperty("directive", out var d)
+            || d.ValueKind != JsonValueKind.String)
+        {
+            throw new DMZAgentServerException(
+                "the step's answer carried no directive and cannot be read; "
+                + "do not run the call",
+                statusCode: statusCode,
+                body: raw.ValueKind == JsonValueKind.Undefined ? null : raw);
+        }
+
+        var behaviors = new List<Behavior>();
+        if (raw.TryGetProperty("behaviors", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in arr.EnumerateArray()) behaviors.Add(ParseBehavior(entry));
+        }
+
+        IReadOnlyDictionary<string, object?>? anchor = null;
+        if (raw.TryGetProperty("anchor", out var anc) && anc.ValueKind == JsonValueKind.Object)
+        {
+            anchor = JsonObjectToDict(anc);
+        }
+
+        return new StepResult(
+            FrameId:       OptString(raw, "frame_id") ?? string.Empty,
+            InteractionId: OptString(raw, "interaction_id") ?? string.Empty,
+            // Verbatim, known or not. Runs is derived from it.
+            Directive:     d.GetString()!,
+            Scope:         OptString(raw, "scope"),
+            Reason:        OptString(raw, "reason") ?? string.Empty,
+            ApprovalId:    OptString(raw, "approval_id"),
+            // Absent reads as unsettled: claiming reasoning had finished
+            // about a response that never said so is the stronger claim.
+            Settled:       OptBool(raw, "settled") ?? false,
+            Behaviors:     behaviors,
+            Anchor:        anchor,
+            Livemode:      OptBool(raw, "livemode"),
+            Raw:           raw);
+    }
+
+    internal static Behavior ParseBehavior(JsonElement raw)
+    {
+        IReadOnlyDictionary<string, object?>? anchor = null;
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("anchor", out var anc)
+            && anc.ValueKind == JsonValueKind.Object)
+        {
+            anchor = JsonObjectToDict(anc);
+        }
+
+        return new Behavior(
+            // The canon's own word, and the server's own polarity: neither
+            // is mapped, renamed or checked against a list (§1.9, App. B).
+            Tag:           OptString(raw, "tag") ?? string.Empty,
+            Polarity:      OptString(raw, "polarity") ?? string.Empty,
+            Strength:      OptDouble(raw, "strength") ?? 0.0,
+            Source:        OptString(raw, "source") ?? string.Empty,
+            Evidence:      OptStringArray(raw, "evidence") ?? Array.Empty<string>(),
+            Calls:         OptStringArray(raw, "calls") ?? Array.Empty<string>(),
+            BehaviorId:    OptString(raw, "behavior_id"),
+            SubjectId:     OptString(raw, "subject_id"),
+            InteractionId: OptString(raw, "interaction_id"),
+            ObservedAt:    OptString(raw, "observed_at"),
+            Anchor:        anchor);
+    }
+
+    internal static BehaviorPage ParseBehaviorPage(JsonElement raw)
+    {
+        var items = new List<Behavior>();
+        if (raw.ValueKind == JsonValueKind.Object
+            && raw.TryGetProperty("behaviors", out var arr)
+            && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in arr.EnumerateArray()) items.Add(ParseBehavior(entry));
+        }
+        return new BehaviorPage(items, OptString(raw, "next_cursor"), raw);
     }
 
     internal static CaptureResult ParseCaptureResult(JsonElement raw)

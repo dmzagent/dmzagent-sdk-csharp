@@ -187,6 +187,69 @@ public sealed class ApprovalsAndLedgerTests
         r.PendingApprovalId.Should().BeNull();
     }
 
+    [Fact]
+    public async Task AHoldIsADenialThatNamesItsApproval()
+    {
+        var stub = Serving.Ok("""
+            { "state": "hold", "allow": false, "warning": false,
+              "reason": "refund above the reviewed ceiling",
+              "fired_policies": [ { "cb_policy_id": "cbp_11", "name": "refund ceiling",
+                                    "action": "require_approval" } ],
+              "anchor": { "ledger_index": 40197, "hash": "b1c4", "ledger_event_id": "le_9" },
+              "pending_approval_id": "apr_7f3c9a1b" }
+            """);
+        using var cx = Client(stub);
+        var r = await cx.CheckAsync(subjectId: "subject:dv:bot");
+        r.State.Should().Be("hold");
+        r.Allow.Should().BeFalse();
+        r.AwaitingApproval.Should().BeTrue();
+        r.FiredPolicies[0]["action"].Should().Be("require_approval");
+        r.Anchor!["ledger_index"].Should().Be(40197L);
+    }
+
+    [Theory]
+    // An unknown state denies (§2.2, Appendix B), whatever allow said.
+    [InlineData("""{ "state": "quarantined", "allow": true }""", false)]
+    [InlineData("""{ "state": "quarantined" }""",                false)]
+    [InlineData("""{ "state": "HOLD", "allow": true }""",        false)]
+    // Absent allow is derived from the state, never defaulted to true.
+    [InlineData("""{ "state": "hold" }""",                       false)]
+    [InlineData("""{ "state": "open" }""",                       false)]
+    [InlineData("""{ "state": "closed" }""",                     true)]
+    [InlineData("""{ "state": "half_open", "warning": true }""", true)]
+    // A known state keeps the allow the wire carried.
+    [InlineData("""{ "state": "closed", "allow": true }""",       true)]
+    [InlineData("""{ "state": "half_open", "allow": true }""",   true)]
+    [InlineData("""{ "state": "open", "allow": false }""",       false)]
+    [InlineData("""{ "state": "hold", "allow": false }""",       false)]
+    [InlineData("""{ "state": "closed", "allow": false }""",     false)]
+    public async Task AllowIsReadFromTheWireAndAnUnknownStateDenies(string body, bool allow)
+    {
+        var stub = Serving.Ok(body);
+        using var cx = Client(stub);
+        var r = await cx.CheckAsync(subjectId: "subject:dv:bot");
+        r.Allow.Should().Be(allow);
+        r.State.Should().Be(JsonDocument.Parse(body).RootElement.GetProperty("state").GetString(),
+            "the raw state is kept, known or not");
+    }
+
+    [Theory]
+    [InlineData("allow")]
+    [InlineData("review")]
+    [InlineData("block")]
+    [InlineData("require_approval")]
+    [InlineData("a_new_action")]
+    public async Task APolicyActionIsPassedThroughUnchecked(string action)
+    {
+        var stub = Serving.Ok($$"""
+            { "state": "open", "allow": false,
+              "fired_policies": [ { "cb_policy_id": "p1", "name": "n", "action": "{{action}}" } ] }
+            """);
+        using var cx = Client(stub);
+        var r = await cx.CheckAsync(subjectId: "subject:dv:bot");
+        r.FiredPolicies[0]["action"].Should().Be(action);
+    }
+
     // ------------------------------------------------------------------ //
     // A decision records a human, or it does not happen
     // ------------------------------------------------------------------ //
