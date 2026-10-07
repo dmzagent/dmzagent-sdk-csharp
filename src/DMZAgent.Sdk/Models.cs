@@ -356,9 +356,10 @@ public sealed record Behavior(
     [property: JsonPropertyName("interaction_id")] string?                               InteractionId,
     [property: JsonPropertyName("observed_at")]    string?                               ObservedAt,
     // A logic pass and a reasoning pass anchor on different chains, so
-    // ledger_index here is evidence and not an order (§2.12).
-    [property: JsonPropertyName("anchor")]         IReadOnlyDictionary<string, object?>? Anchor,
-    [property: JsonIgnore]                         JsonElement                           Raw
+    // ledger_index here is evidence and not an order (§2.12). No Raw: §7.17
+    // has none, and the four SDKs expose the same fields. The page's or the
+    // step's own Raw holds the server JSON.
+    [property: JsonPropertyName("anchor")]         IReadOnlyDictionary<string, object?>? Anchor
 );
 
 /// <summary>

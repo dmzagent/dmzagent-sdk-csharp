@@ -10,8 +10,9 @@
   `POST /v1/agent-stream/step` and returns a `StepResult` carrying the
   directive for it. `AgentSession(agentSubjectId, interactionId)` is a
   handle with `IntentAsync`, `CallAsync`, `ResultAsync` and
-  `RefusedAsync`; it holds its two ids and nothing else, so it never
-  remembers a refusal or infers `attemptOf` for you.
+  `RefusedAsync`; it holds its client and its two ids and nothing it
+  learned, so it never remembers a refusal or infers `attemptOf` for you.
+  It owns no resource and is not `IDisposable`.
 
   Branch on `StepResult.Runs`. It is `true` exactly for `proceed` and
   `warn`, and `false` for `hold`, `block`, `shutdown` and any directive
@@ -24,15 +25,20 @@
   A malformed step is refused locally, with no round trip: an unknown
   `phase`; `callId` or `tool` missing on `call`/`result`; `status` missing
   on `result`; `refusedBy` missing when `status` is `refused`, or present
-  when it is not; `intent` missing on `intent`. `idempotencyKey` is
-  accepted on every step method and never generated.
+  when it is not, on any phase; `intent` missing on `intent` or without
+  a string `text`; a blank `agentSubjectId` or `interactionId`.
+  `idempotencyKey` is accepted on every step method and never generated.
+  An unreadable 2xx answer throws with its status code. A missing
+  `settled` reads `false` and a missing `livemode` `null`.
 
 - **The conduct record is readable.** `ListBehaviorsAsync` and
   `IterBehaviorsAsync` read `GET /v1/subjects/{subject_id}/behaviors`,
   returning `BehaviorPage` and `Behavior`. A behavior's `Tag` is the
   installed canon's own word and is not mapped or renamed; an unknown
-  `Polarity` is kept as sent. There is no method that removes or amends
-  a behavior: the record is corrected by correcting the soul.
+  `Polarity` is kept as sent. `Behavior` has no `Raw` (spec §7.17);
+  `StepResult` and `BehaviorPage` carry the server JSON. There is no
+  method that removes or amends a behavior: the record is corrected by
+  correcting the soul.
 
 - **`GetApprovalAsync(approvalId)`**, for a caller holding a `hold` to
   learn whether it was approved without walking `ListApprovalsAsync`. An
@@ -49,10 +55,12 @@
   vector. Before this release the golden-envelope and validation fixtures
   for those three methods, already on the spec's main branch, failed in
   the runner as unsupported methods.
-- A subject id in a path keeps its colons
-  (`/v1/subjects/subject:dv:agent-a/behaviors`), which is legal in a path
-  segment and is the path the corpus pins. Every other reserved character
-  is still escaped.
+- A subject id in a path is one RFC 3986 segment: `:` and `@` as written
+  (`/v1/subjects/subject:dv:agent-a/behaviors`, the path the corpus
+  pins), every other reserved character encoded, so `/` cannot split it.
+  An id of `.` or `..` throws `ArgumentException` before any request,
+  in `ListBehaviorsAsync`, `IterBehaviorsAsync` and `GetApprovalAsync`,
+  because the URI layer would resolve it to a different resource.
 
 ### Docs
 - The README's webhook section names the header the server sends,

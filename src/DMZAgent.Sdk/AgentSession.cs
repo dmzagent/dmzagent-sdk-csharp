@@ -17,7 +17,9 @@ namespace DMZAgent.Sdk;
 /// </para>
 ///
 /// <para>
-/// The handle holds nothing but its two ids. It does not remember
+/// The handle holds its client and its two ids, and nothing it learned. It
+/// owns no resource, so unlike <see cref="Conversation"/> it is not
+/// disposable and has nothing to close (§5.23). It does not remember
 /// refusals, does not infer <c>attemptOf</c>, and does not track which
 /// calls are pending: a harness that knows a call retries an earlier one
 /// says so, and the server does not depend on it (§1.9).
@@ -41,7 +43,7 @@ namespace DMZAgent.Sdk;
 /// </code>
 /// </example>
 /// </summary>
-public sealed class AgentSession : IDisposable
+public sealed class AgentSession
 {
     private readonly DMZAgentClient _client;
 
@@ -161,13 +163,4 @@ public sealed class AgentSession : IDisposable
             attemptOf:         attemptOf,
             idempotencyKey:    idempotencyKey,
             cancellationToken: cancellationToken);
-
-    /// <summary>
-    /// No-op. The handle owns no resource and keeps no state to release; it
-    /// implements the client's resource idiom so it can sit in the same
-    /// <c>using</c> as a <see cref="Conversation"/> (§6.3).
-    /// </summary>
-    public void Dispose()
-    {
-    }
 }

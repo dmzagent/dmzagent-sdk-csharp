@@ -309,8 +309,9 @@ else
 are `false`, and so is **any directive this build does not know** — an
 unknown word from the governor reads as `block`, and `Directive` keeps the
 raw string so you can see what was said. A step that cannot be sent, or
-whose answer carries no readable directive, throws; there is no result
-that means "no answer".
+whose answer carries no readable directive, throws
+`DMZAgentServerException` (with the response's status on an unreadable
+2xx); there is no result that means "no answer".
 
 On `hold`, `ApprovalId` names the approval to wait on. Read it with
 `GetApprovalAsync`: approved runs, anything else is `block`. On
@@ -320,9 +321,13 @@ On `hold`, `ApprovalId` names the approval to wait on. Read it with
 of the step. It refuses a malformed step before sending it: an unknown
 `phase`; `callId` or `tool` missing on a `call` or `result`; `status`
 missing on a `result`; `refusedBy` missing when `status` is `refused`,
-or present when it is not; `intent` missing on an `intent` step.
+or present when it is not, on any phase; `intent` missing on an
+`intent` step, or without a string `text`; a blank `agentSubjectId` or
+`interactionId`.
 
-The handle holds its two ids and nothing else. It does not remember
+The handle holds its client and its two ids, and nothing it learned. It
+owns no resource, so it is not disposable and has nothing to close. It
+does not remember
 refusals and does not infer `attemptOf`: when you know a call retries an
 earlier one, say so with `attemptOf`. Pass an `idempotencyKey` on `call`
 steps you might retry, so one call is not counted as two attempts; the
@@ -345,6 +350,11 @@ await foreach (var b in cx.IterBehaviorsAsync(
     Console.WriteLine($"{b.Tag} {b.Strength} {string.Join(",", b.Calls)}");
 }
 ```
+
+A subject id travels as one path segment, with `:` and `@` as written
+and every other reserved character encoded. An id of `.` or `..` cannot
+be a segment and throws `ArgumentException` before any request (so does
+`GetApprovalAsync` for such an id).
 
 `Strength` is what the subject's soul holds for that tag now, and it
 falls as the soul lets the tag go. There is no method that removes or
@@ -371,8 +381,7 @@ response or raw text). `CircuitBreakerOpenException` adds `Reason`,
 
 ## Resource lifecycle
 
-`DMZAgentClient`, `Conversation` and `AgentSession` implement
-`IDisposable` (the session's is a no-op: it owns nothing).
+`DMZAgentClient` and `Conversation` both implement `IDisposable`.
 Always wrap them in `using` — or call `.Close()` explicitly. Closing
 the client releases the underlying HTTP transport; calling close
 multiple times is a no-op.

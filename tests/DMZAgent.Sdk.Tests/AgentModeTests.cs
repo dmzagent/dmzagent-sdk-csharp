@@ -267,6 +267,7 @@ public sealed class AgentModeTests
         var r = await cx.AgentStepAsync(Agent, Session, "call", callId: "call_1", tool: "Bash");
 
         r.Settled.Should().BeFalse();
+        r.Livemode.Should().BeNull("§7.16: a livemode the server omitted is unknown, not test mode");
         r.Behaviors.Should().BeEmpty();
     }
 
@@ -290,7 +291,10 @@ public sealed class AgentModeTests
         var act = async () => returned = await cx.AgentStepAsync(
             Agent, Session, "call", callId: "call_1", tool: "Bash");
 
-        await act.Should().ThrowAsync<DMZAgentServerException>();
+        // ServerError with the response's status (§1.9): the fault is on the
+        // server's side of the wire.
+        (await act.Should().ThrowAsync<DMZAgentServerException>())
+            .Which.StatusCode.Should().Be(200);
         returned.Should().BeNull();
     }
 
@@ -341,6 +345,8 @@ public sealed class AgentModeTests
         yield return new object?[] { "refused w/o refuser", "refused",      Agent, Session, "result", "call_1", "Bash", "refused", null,       false };
         yield return new object?[] { "refuser on ok",       "refused",      Agent, Session, "result", "call_1", "Bash", "ok",      "host",     false };
         yield return new object?[] { "refuser on a call",   "refused",      Agent, Session, "call",   "call_1", "Bash", null,      "governor", false };
+        yield return new object?[] { "refuser on intent",   "refused",      Agent, Session, "intent", null,     null,   null,      "harness",  true  };
+        yield return new object?[] { "blank interaction",   "interaction",  Agent, "",      "intent", null,     null,   null,      null,       true  };
         yield return new object?[] { "intent w/o intent",   "intent",       Agent, Session, "intent", null,     null,   null,      null,       false };
     }
 
@@ -361,6 +367,41 @@ public sealed class AgentModeTests
         (await act.Should().ThrowAsync<DMZAgentValidationException>(why))
             .WithMessage($"*{fragment}*");
         stub.Calls.Should().Be(0, $"{why}: a malformed step must not reach the wire");
+    }
+
+    public static IEnumerable<object?[]> IntentsWithoutText()
+    {
+        yield return new object?[] { "no text",          new Dictionary<string, object?> { ["paths"] = new[] { "src/" } } };
+        yield return new object?[] { "text is null",     new Dictionary<string, object?> { ["text"] = null } };
+        yield return new object?[] { "text is a number", new Dictionary<string, object?> { ["text"] = 7L } };
+        yield return new object?[] { "text is a list",   new Dictionary<string, object?> { ["text"] = new[] { "x" } } };
+    }
+
+    [Theory]
+    [MemberData(nameof(IntentsWithoutText))]
+    public async Task AnIntentWithoutAStringTextIsRefusedBeforeAnyRequest(
+        string why, Dictionary<string, object?> intent)
+    {
+        var stub = Serving.Ok(StepJson());
+        using var cx = Client(stub);
+
+        var act = async () => await cx.AgentStepAsync(Agent, Session, "intent", intent: intent);
+
+        (await act.Should().ThrowAsync<DMZAgentValidationException>(why)).WithMessage("*text*");
+        stub.Calls.Should().Be(0, why);
+    }
+
+    [Fact]
+    public async Task AnEmptyIntentTextIsStillAString()
+    {
+        // §5.22 asks for a string text, not a non-empty one.
+        var stub = Serving.Ok(StepJson());
+        using var cx = Client(stub);
+
+        await cx.AgentStepAsync(Agent, Session, "intent",
+            intent: new Dictionary<string, object?> { ["text"] = "" });
+
+        stub.Calls.Should().Be(1);
     }
 
     [Theory]
@@ -477,7 +518,7 @@ public sealed class AgentModeTests
     {
         var stub = Serving.Ok(StepJson());
         using var cx = Client(stub);
-        using var s = cx.AgentSession(Agent, Session);
+        var s = cx.AgentSession(Agent, Session);
 
         await s.IntentAsync("Add a trace id.", paths: new[] { "src/obs/" }, tools: new[] { "Edit" });
         await s.CallAsync("call_7", "Bash", Args("git push"), attemptOf: "call_5");
@@ -545,6 +586,18 @@ public sealed class AgentModeTests
         var s = cx.AgentSession(Agent, Session);
         s.AgentSubjectId.Should().Be(Agent);
         s.InteractionId.Should().Be(Session);
+    }
+
+    [Fact]
+    public void TheSessionHasNothingToClose()
+    {
+        // §5.23: it owns no resource, so unlike Conversation it exposes no
+        // close. A Dispose would invite a using that guards nothing.
+        typeof(IDisposable).IsAssignableFrom(typeof(AgentSession)).Should().BeFalse();
+        typeof(IAsyncDisposable).IsAssignableFrom(typeof(AgentSession)).Should().BeFalse();
+        typeof(AgentSession).GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Select(m => m.Name)
+            .Should().NotContain(new[] { "Close", "CloseAsync", "Dispose", "DisposeAsync" });
     }
 
     [Fact]
@@ -631,6 +684,61 @@ public sealed class AgentModeTests
 
         stub.Seen[0].RequestUri!.AbsolutePath
             .Should().Be("/v1/subjects/subject:dv:a%20b%2Fc%3Fd/behaviors");
+    }
+
+    [Fact]
+    public async Task ASlashInAnIdIsEncodedAndAnAtSignIsNot()
+    {
+        var stub = Serving.Ok("""{ "behaviors": [] }""");
+        using var cx = Client(stub);
+
+        await cx.ListBehaviorsAsync("subject:dv:team/agent@host");
+
+        stub.Seen[0].RequestUri!.AbsolutePath
+            .Should().Be("/v1/subjects/subject:dv:team%2Fagent@host/behaviors",
+                "the id is one segment: '/' must not split it");
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public async Task ADotSegmentIdIsRefusedBeforeAnyRequest(string id)
+    {
+        // The URI layer resolves these away: the request would reach
+        // /v1/subjects/behaviors or /v1/behaviors, not this subject's record.
+        var stub = Serving.Ok("""{ "behaviors": [] }""");
+        using var cx = Client(stub);
+
+        var list = async () => await cx.ListBehaviorsAsync(id);
+        var iter = async () => { await foreach (var _ in cx.IterBehaviorsAsync(id)) { } };
+
+        (await list.Should().ThrowAsync<ArgumentException>()).Which.ParamName.Should().Be("subjectId");
+        await iter.Should().ThrowAsync<ArgumentException>();
+        stub.Calls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("..x")]
+    [InlineData("...")]
+    [InlineData(".hidden")]
+    public async Task OnlyTheTwoDotSegmentsAreRefused(string id)
+    {
+        var stub = Serving.Ok("""{ "behaviors": [] }""");
+        using var cx = Client(stub);
+
+        await cx.ListBehaviorsAsync(id);
+
+        stub.Seen[0].RequestUri!.AbsolutePath.Should().Be($"/v1/subjects/{id}/behaviors");
+    }
+
+    [Fact]
+    public void ABehaviorHasNoRaw()
+    {
+        // §7.17 lists no raw, and the four SDKs expose the same fields. The
+        // step's or the page's own Raw holds the server JSON.
+        typeof(Behavior).GetProperty("Raw").Should().BeNull();
+        typeof(StepResult).GetProperty("Raw").Should().NotBeNull();
+        typeof(BehaviorPage).GetProperty("Raw").Should().NotBeNull();
     }
 
     [Fact]
@@ -767,6 +875,22 @@ public sealed class AgentModeTests
         var exc = (await act.Should().ThrowAsync<DMZAgentException>()).Which;
         exc.GetType().Should().Be(typeof(DMZAgentException));
         exc.StatusCode.Should().Be(404);
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public async Task ADotSegmentApprovalIdIsRefusedRatherThanReadingTheList(string id)
+    {
+        // "/v1/approvals/." resolves to "/v1/approvals/": the list, which
+        // would parse as an approval with every field blank.
+        var stub = Serving.Ok(ApprovalJson);
+        using var cx = Client(stub);
+
+        var act = async () => await cx.GetApprovalAsync(id);
+
+        (await act.Should().ThrowAsync<ArgumentException>()).Which.ParamName.Should().Be("approvalId");
+        stub.Calls.Should().Be(0);
     }
 
     [Theory]

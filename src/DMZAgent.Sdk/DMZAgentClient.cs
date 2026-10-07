@@ -904,8 +904,9 @@ public sealed class DMZAgentClient : IDisposable
     /// <paramref name="callId"/> or <paramref name="tool"/> is missing on a
     /// <c>call</c> or <c>result</c> step; <paramref name="status"/> is missing
     /// on a <c>result</c> step; <paramref name="refusedBy"/> is missing when
-    /// <paramref name="status"/> is <c>refused</c>, or present when it is not;
-    /// <paramref name="intent"/> is missing on an <c>intent</c> step. A
+    /// <paramref name="status"/> is <c>refused</c>, or present when it is not,
+    /// on any phase; <paramref name="intent"/> is missing on an <c>intent</c>
+    /// step, or carries no string <c>text</c>; either id is blank. A
     /// malformed step is a mistake in the harness, and the failure belongs
     /// where the mistake is.
     /// </exception>
@@ -948,9 +949,9 @@ public sealed class DMZAgentClient : IDisposable
         if (occurredAt is not null) body["occurred_at"] = occurredAt;
         if (metadata is not null)   body["metadata"]    = metadata;
 
-        var raw = await PostJsonAsync("/v1/agent-stream/step", body, idempotencyKey, cancellationToken)
-            .ConfigureAwait(false);
-        return ParseStepResult(raw);
+        var (code, raw) = await PostJsonWithStatusAsync(
+            "/v1/agent-stream/step", body, idempotencyKey, cancellationToken).ConfigureAwait(false);
+        return ParseStepResult(raw, code);
     }
 
     /// <summary>
@@ -1011,6 +1012,11 @@ public sealed class DMZAgentClient : IDisposable
         {
             throw new DMZAgentValidationException("intent is required on an intent step");
         }
+        if (intent is not null && !(intent.TryGetValue("text", out var text) && text is string))
+        {
+            throw new DMZAgentValidationException(
+                "intent must carry a string text: what the agent says it will do");
+        }
     }
 
     /// <summary>
@@ -1043,7 +1049,7 @@ public sealed class DMZAgentClient : IDisposable
     /// <para>Does not follow <c>NextCursor</c> — see
     /// <see cref="IterBehaviorsAsync"/>.</para>
     /// </remarks>
-    /// <param name="subjectId">The subject whose record to read.</param>
+    /// <param name="subjectId">The subject whose record to read. <c>.</c> and <c>..</c> throw <see cref="ArgumentException"/>.</param>
     /// <param name="polarity"><c>positive</c> | <c>negative</c> | <c>all</c>. Unset is the server's <c>all</c>.</param>
     /// <param name="interactionId">Restrict to one session.</param>
     /// <param name="since">ISO-8601; at or after.</param>
@@ -1078,7 +1084,7 @@ public sealed class DMZAgentClient : IDisposable
         }
         if (cursor is not null) query.Add(new("cursor", cursor));
 
-        var path = $"/v1/subjects/{PathSegment(subjectId)}/behaviors";
+        var path = $"/v1/subjects/{PathSegment(subjectId, nameof(subjectId))}/behaviors";
         var raw  = await GetJsonAsync(path + QueryString(query), cancellationToken).ConfigureAwait(false);
         return ParseBehaviorPage(raw);
     }
@@ -1111,6 +1117,7 @@ public sealed class DMZAgentClient : IDisposable
     /// <see cref="ListApprovalsAsync"/>. Approved runs; anything else is
     /// <c>block</c>.
     /// </summary>
+    /// <exception cref="ArgumentException">For an id of <c>.</c> or <c>..</c>.</exception>
     /// <exception cref="DMZAgentException">
     /// On an unknown id: a <c>404</c> is the base type, deliberately — the
     /// spec defers a dedicated not-found type rather than change the
@@ -1125,21 +1132,37 @@ public sealed class DMZAgentClient : IDisposable
         {
             throw new DMZAgentValidationException("approvalId is required");
         }
-        var path = $"/v1/approvals/{Uri.EscapeDataString(approvalId)}";
+        var path = $"/v1/approvals/{PathSegment(approvalId, nameof(approvalId))}";
         var raw  = await GetJsonAsync(path, cancellationToken).ConfigureAwait(false);
         return ParseApproval(raw);
     }
 
     /// <summary>
-    /// Escape one path segment, leaving <c>:</c> as written.
+    /// Encode one path segment as RFC 3986 <c>pchar</c> (spec §2.12):
+    /// <c>:</c> and <c>@</c> as written, every other reserved character
+    /// percent-encoded, so <c>/</c> can never split the id into two segments.
     /// </summary>
     /// <remarks>
-    /// Subject ids are colon-delimited (Appendix A) and a colon is legal
-    /// inside a path segment (RFC 3986 <c>pchar</c>), so the path carries the
+    /// Subject ids are colon-delimited (Appendix A), so the path carries the
     /// id the caller wrote — which is also the path the corpus pins.
     /// </remarks>
-    private static string PathSegment(string value)
-        => Uri.EscapeDataString(value).Replace("%3A", ":", StringComparison.Ordinal);
+    /// <exception cref="ArgumentException">
+    /// For <c>.</c> or <c>..</c>, which no encoding can send as a segment:
+    /// the URI layer resolves them away, and the request would reach a
+    /// different resource than the one named — <c>/v1/approvals/.</c> is
+    /// the approvals list.
+    /// </exception>
+    private static string PathSegment(string value, string paramName)
+    {
+        if (value is "." or "..")
+        {
+            throw new ArgumentException(
+                $"{paramName} '{value}' cannot be sent as a path segment", paramName);
+        }
+        return Uri.EscapeDataString(value)
+            .Replace("%3A", ":", StringComparison.Ordinal)
+            .Replace("%40", "@", StringComparison.Ordinal);
+    }
 
     /// <summary>Reject a page size the server would reject, before the round trip.</summary>
     private static void RequirePageLimit(int limit)
@@ -1240,6 +1263,19 @@ public sealed class DMZAgentClient : IDisposable
         IReadOnlyDictionary<string, object?> body,
         string?                         idempotencyKey,
         CancellationToken               cancellationToken)
+        => (await PostJsonWithStatusAsync(path, body, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false)).Body;
+
+    /// <summary>
+    /// <see cref="PostJsonAsync(string, IReadOnlyDictionary{string, object?}, string?, CancellationToken)"/>,
+    /// keeping the 2xx status, for a caller that must report it when the
+    /// body it came with cannot be read (§1.9).
+    /// </summary>
+    internal async Task<(int Status, JsonElement Body)> PostJsonWithStatusAsync(
+        string                          path,
+        IReadOnlyDictionary<string, object?> body,
+        string?                         idempotencyKey,
+        CancellationToken               cancellationToken)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(DMZAgentClient));
 
@@ -1273,7 +1309,8 @@ public sealed class DMZAgentClient : IDisposable
 
         using (response)
         {
-            return await HandleResponseAsync(response, path, cancellationToken).ConfigureAwait(false);
+            var json = await HandleResponseAsync(response, path, cancellationToken).ConfigureAwait(false);
+            return ((int)response.StatusCode, json);
         }
     }
 
@@ -1641,11 +1678,14 @@ public sealed class DMZAgentClient : IDisposable
     /// <remarks>
     /// A 2xx whose body is not an object, or carries no <c>directive</c>
     /// string, is an answer that cannot be read (§1.9), and the caller must
-    /// not run the call. Returning a result with an empty directive would
+    /// not run the call. It is a <c>ServerError</c> carrying the response's
+    /// status: the fault is on the server's side of the wire, and a retry
+    /// under the same <c>Idempotency-Key</c> is safe. Returning a result
+    /// with an empty directive would
     /// also read as <c>Runs == false</c>, but it would hand the caller a
     /// value shaped like an answer, which is the thing §1.9 forbids.
     /// </remarks>
-    internal static StepResult ParseStepResult(JsonElement raw)
+    internal static StepResult ParseStepResult(JsonElement raw, int statusCode)
     {
         if (raw.ValueKind != JsonValueKind.Object
             || !raw.TryGetProperty("directive", out var d)
@@ -1654,7 +1694,7 @@ public sealed class DMZAgentClient : IDisposable
             throw new DMZAgentServerException(
                 "the step's answer carried no directive and cannot be read; "
                 + "do not run the call",
-                statusCode: null,
+                statusCode: statusCode,
                 body: raw.ValueKind == JsonValueKind.Undefined ? null : raw);
         }
 
@@ -1710,8 +1750,7 @@ public sealed class DMZAgentClient : IDisposable
             SubjectId:     OptString(raw, "subject_id"),
             InteractionId: OptString(raw, "interaction_id"),
             ObservedAt:    OptString(raw, "observed_at"),
-            Anchor:        anchor,
-            Raw:           raw);
+            Anchor:        anchor);
     }
 
     internal static BehaviorPage ParseBehaviorPage(JsonElement raw)
