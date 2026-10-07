@@ -1470,10 +1470,21 @@ public sealed class DMZAgentClient : IDisposable
             Raw:            raw);
     }
 
+    /// <summary>The breaker states this build knows (spec §2.2).</summary>
+    private static readonly HashSet<string> KnownBreakerStates = new(StringComparer.Ordinal)
+    {
+        "closed", "half_open", "hold", "open",
+    };
+
     internal static CheckResult ParseCheckResult(JsonElement raw)
     {
         string state          = OptString(raw, "state") ?? "closed";
-        bool   allow          = OptBool(raw, "allow") ?? true;
+        // allow is read from the wire. Two things override it, both toward
+        // refusing: a state this build does not know denies (§2.2,
+        // Appendix B), and an absent allow is derived from the state rather
+        // than defaulted to true, so hold and open refuse even then.
+        bool   allow          = KnownBreakerStates.Contains(state)
+                                && (OptBool(raw, "allow") ?? state is "closed" or "half_open");
         bool   warning        = OptBool(raw, "warning") ?? false;
         string reason         = OptString(raw, "reason") ?? string.Empty;
         string checkedAt      = OptString(raw, "checked_at") ?? string.Empty;

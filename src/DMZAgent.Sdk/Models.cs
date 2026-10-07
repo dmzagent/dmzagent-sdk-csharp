@@ -42,11 +42,21 @@ public sealed record EmitResult(
 
 /// <summary>
 /// Result of <see cref="DMZAgentClient.CheckAsync"/>. Per sdk-spec.md
-/// §7.2 — every field carries server semantics:
+/// §2.2 / §7.5 — every field carries server semantics:
 /// <list type="bullet">
-///   <item><see cref="State"/> ∈ <c>closed</c> | <c>half_open</c> | <c>open</c>.</item>
-///   <item><see cref="Allow"/> is <c>false</c> only when state is <c>open</c>.</item>
+///   <item><see cref="State"/> ∈ <c>closed</c> | <c>half_open</c> | <c>hold</c> | <c>open</c>,
+///   or the server's raw word for a state this build does not know.</item>
+///   <item><see cref="Allow"/> is <c>false</c> when state is <c>hold</c> or
+///   <c>open</c>, and for any state this build does not know: an unknown
+///   state denies (Appendix B), whatever <c>allow</c> the wire carried.</item>
 ///   <item><see cref="Warning"/> is <c>true</c> when state is <c>half_open</c>.</item>
+///   <item><c>hold</c> is a subject waiting on a person — a
+///   <c>require_approval</c> policy or an operator holds it — and
+///   <see cref="PendingApprovalId"/> names the approval when there is one.</item>
+///   <item>Each <see cref="FiredPolicies"/> entry's <c>action</c> is
+///   <c>allow</c> | <c>review</c> | <c>block</c> | <c>require_approval</c>
+///   (closed, half_open, open, hold; the most restrictive wins). The SDK
+///   passes it through and checks it against no list.</item>
 /// </list>
 /// </summary>
 public sealed record CheckResult(
@@ -67,10 +77,9 @@ public sealed record CheckResult(
     [property: JsonIgnore]                           TimeSpan                                                        CacheAge = default,
     [property: JsonIgnore]                           bool                                                            Stale = false,
     // The approval this denial is waiting on, or null (spec §2.2).
-    // Non-null only alongside Allow == false. It is a field rather than a
-    // fourth breaker state so that code reading Allow alone still refuses:
-    // a client that has never heard of approvals must not start allowing
-    // what it used to deny.
+    // Non-null only alongside Allow == false, with State "hold". Code that
+    // reads Allow alone still refuses: a client that has never heard of
+    // approvals must not start allowing what it used to deny.
     [property: JsonPropertyName("pending_approval_id")] string?                                                      PendingApprovalId = null
 )
 {

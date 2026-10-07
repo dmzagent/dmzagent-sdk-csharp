@@ -50,6 +50,14 @@
 
 ### Changed
 - Spec pin and package version are both **0.11.0**.
+- **The breaker has a `hold` state** (spec §2.2): a subject waiting on a
+  person, with `Allow` false and `PendingApprovalId` naming the approval.
+  Policy `action` values are `allow`, `review`, `block` and
+  `require_approval`; the SDK passes them through unchecked.
+- **`CheckAsync` no longer fails open.** A state this build does not know
+  now reads `Allow == false` whatever the response's `allow` said, and a
+  response without `allow` derives it from the state (`closed` and
+  `half_open` allow) instead of defaulting to `true`.
 - The contract runner dispatches `agent_step`, `list_behaviors` and
   `get_approval`, and runs `step-vectors.json`, asserting `runs` on every
   vector. Before this release the golden-envelope and validation fixtures

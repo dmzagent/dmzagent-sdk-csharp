@@ -94,6 +94,12 @@ catch (CircuitBreakerOpenException ex)
 }
 ```
 
+A breaker is `closed`, `half_open` (allowed, with `Warning`), `hold` or
+`open`; a policy's `action` is `allow`, `review`, `block` or
+`require_approval`, setting those four states in order, the most
+restrictive winning. `Allow` is read from the response, but a state this
+build does not know always reads as `Allow == false`.
+
 ## Multi-party conversations
 
 For longer interactions, use the `Conversation` handle — it caches the
@@ -182,7 +188,8 @@ rather than relying on deliveries alone.
 
 A circuit-breaker policy can fire with action `require_approval`, which
 **holds** the action instead of refusing it. `CheckAsync` then hands back a
-denial that names what it is waiting on:
+denial — `State` is `hold`, `Allow` is `false` — that names what it is
+waiting on:
 
 ```csharp
 var g = await cx.CheckAsync(subjectId: "subject:dv:checkout-bot");
